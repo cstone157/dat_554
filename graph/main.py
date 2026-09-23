@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """LangGraph application that generates, runs, and evaluates Python code based on user description."""
 
+import argparse
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,20 +14,21 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
-# Set up logging
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s, %(message)s")
+# logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 
 # Load environment variables from .env file
 load_dotenv()
 
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     """State schema for the code generation agent."""
     user_description: str
     generated_code: str
     execution_result: dict  # {stdout: str, stderr: str, returncode: int}
     evaluation: str
+    model: str
+    output: str
 
 
 # Prompt templates
@@ -39,28 +42,31 @@ with open(Path("agents/Agents_eval.md").resolve(), "r") as f:
 
 def prompt_user(state: AgentState) -> AgentState:
     """Get user description via CLI input."""
+    logger.info("Prompting user for Python function description.")
     if state.get("user_description"):
         return state
 
     description = input("Enter a Python function description:\n> ").strip()
     while not description:
         description = input("Description cannot be empty. Enter a Python function description:\n> ").strip()
+    logger.info("User provided description : %s", description)
     return {"user_description": description}
 
 
 def generate_code(state: AgentState) -> AgentState:
     """Generate Python code using LLM based on user description."""
     llm_base_url = os.environ.get("LLM_BASE_URL", "")
-    llm_name = os.environ.get("LLM_MODEL_NAME", "qwen3.6")
+    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
     llm_api_key = os.environ.get("LLM_API_KEY", "")
+    logger.info("Generating code using LLM model : %s", llm_name)
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
     prompt = PROMPT_GENERATE_CODE.format(description=state["user_description"])
     response = llm.invoke(prompt)
     code = response.content.strip()
-
+    logger.info("Generated code")
+    
     # Extract code from markdown fences if present
-    import re
     match = re.search(r'```python\s*\n(.*?)\n```', code, re.DOTALL)
     if match:
         code = match.group(1).strip()
@@ -71,12 +77,14 @@ def generate_code(state: AgentState) -> AgentState:
         if lines[-1].strip() == "```":
             lines.pop()  # Remove closing ``` line
         code = "\n".join(lines).strip()
+    logger.info("extracted code from markdown fences if present")
 
     return {"generated_code": code}
 
 
 def run_code(state: AgentState) -> AgentState:
     """Write generated code to a temp file and execute it."""
+    logger.info("Running generated code.")
     code = state["generated_code"]
 
     # Write to temporary file
@@ -97,12 +105,14 @@ def run_code(state: AgentState) -> AgentState:
             "stderr": result.stderr,
             "returncode": result.returncode
         }
+        logger.info("Execution completed with return code: %s", result.returncode)
     except subprocess.TimeoutExpired:
         execution_result = {
             "stdout": "",
             "stderr": "Execution timed out after 30 seconds",
             "returncode": -1
         }
+        logger.warning("Execution timed out after 30 seconds")
     finally:
         # Clean up temp file
         Path(temp_path).unlink(missing_ok=True)
@@ -112,7 +122,8 @@ def run_code(state: AgentState) -> AgentState:
 
 def evaluate(state: AgentState) -> AgentState:
     """Evaluate the generated code using LLM."""
-    llm_name = __import__("os").environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+    logger.info("Evaluating generated code.")
+    llm_name = state.get("model") or __import__("os").environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
     llm_api_key = __import__("os").environ.get("LLM_API_KEY", "")
     llm_base_url = __import__("os").environ.get("LLM_BASE_URL", "")
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
@@ -127,11 +138,44 @@ def evaluate(state: AgentState) -> AgentState:
     )
 
     response = llm.invoke(prompt)
+    logger.info("Evaluation completed.")
     return {"evaluation": response.content.strip()}
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="LangGraph Code Generator & Evaluator")
+    parser.add_argument("--model", type=str, default=None,
+                        help="LLM model name (overrides LLM_MODEL_NAME env var)")
+    parser.add_argument("--output", type=str, default="console",
+                        help="Output destination: 'console' (default) or a file path")
+    parser.add_argument("--log_file", type=str, default=None,
+                        help="Log file path to write logging output to")
+    return parser.parse_args()
 
 
 def main():
     """Main entry point: build and run the LangGraph workflow."""
+    args = parse_args()
+
+    # Set up log file if specified
+    if args.log_file:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s : %(message)s",
+            handlers=[
+                logging.FileHandler(args.log_file),
+                logging.StreamHandler()
+            ]
+        )
+        logger.info("Logging to file: %s", args.log_file)
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s : %(message)s",
+            handlers=[logging.StreamHandler()]
+        )
+
     # Build the graph
     graph_builder = StateGraph(AgentState)
 
@@ -151,8 +195,12 @@ def main():
     # Compile the graph
     app = graph_builder.compile()
 
-    # Initialize state (empty - prompt_user will get input)
+    # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
+    if args.model:
+        initial_state["model"] = args.model
+    if args.output and args.output != "console":
+        initial_state["output"] = args.output
 
     # Run the workflow
     print("=" * 60)
@@ -162,31 +210,40 @@ def main():
 
     result = app.invoke(initial_state)
 
-    # Display results
-    print("\n" + "=" * 60)
-    print("  RESULTS")
-    print("=" * 60)
-    print("\n📝 User Description:")
-    print(f"   {result['user_description']}")
-
-    print("\n💻 Generated Code:")
-    print("-" * 40)
-    print(result["generated_code"])
-    print("-" * 40)
+    # Build and display results
+    lines = []
+    lines.append("\n" + "=" * 60)
+    lines.append("  RESULTS")
+    lines.append("=" * 60)
+    lines.append("\n📝 User Description:")
+    lines.append(f"   {result['user_description']}")
+    lines.append("\n💻 Generated Code:")
+    lines.append("-" * 40)
+    lines.append(result["generated_code"])
+    lines.append("-" * 40)
 
     exec_result = result["execution_result"]
-    print("\n⚡ Execution Results:")
+    lines.append("\n⚡ Execution Results:")
     if exec_result["stdout"]:
-        print(f"\n   Standard Output:\n   {exec_result['stdout']}")
+        lines.append(f"\n   Standard Output:\n   {exec_result['stdout']}")
     if exec_result["stderr"]:
-        print(f"\n   Standard Error:\n   {exec_result['stderr']}")
-    print(f"   Return Code: {exec_result['returncode']}")
+        lines.append(f"\n   Standard Error:\n   {exec_result['stderr']}")
+    lines.append(f"   Return Code: {exec_result['returncode']}")
 
-    print("\n📊 Evaluation:")
-    print("-" * 40)
-    print(result["evaluation"])
-    print("-" * 40)
-    print()
+    lines.append("\n📊 Evaluation:")
+    lines.append("-" * 40)
+    lines.append(result["evaluation"])
+    lines.append("-" * 40)
+    output_text = "\n".join(lines) + "\n"
+
+    # Route output to file or console based on --output argument
+    output_mode = result.get("output", "console")
+    if output_mode and output_mode != "console":
+        Path(output_mode).write_text(output_text, encoding="utf-8")
+        Path(output_mode + "_code").write_text(result["generated_code"], encoding="utf-8")
+        print(f"Results written to {output_mode}")
+    else:
+        print(output_text)
 
 
 if __name__ == "__main__":
