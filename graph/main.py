@@ -15,7 +15,6 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
 logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -24,11 +23,12 @@ load_dotenv()
 class AgentState(TypedDict, total=False):
     """State schema for the code generation agent."""
     user_description: str
+    user_feedback: str
     generated_code: str
     execution_result: dict  # {stdout: str, stderr: str, returncode: int}
     evaluation: str
     model: str
-    output: str
+    project_folder: str
 
 
 # Prompt templates
@@ -46,11 +46,26 @@ def prompt_user(state: AgentState) -> AgentState:
     if state.get("user_description"):
         return state
 
-    description = input("Enter a Python function description:\n> ").strip()
-    while not description:
-        description = input("Description cannot be empty. Enter a Python function description:\n> ").strip()
-    logger.info("User provided description : %s", description)
+    # Use --user_prompt argument if provided, otherwise ask interactively
+    if state.get("_user_prompt_arg"):
+        description = state["_user_prompt_arg"]
+        logger.info("Using --user_prompt argument: %s", description)
+    else:
+        description = input("Enter a Python function description:\n> ").strip()
+        while not description:
+            description = input("Description cannot be empty. Enter a Python function description:\n> ").strip()
+        logger.info("User provided description : %s", description)
     return {"user_description": description}
+
+
+def prompt_user_feedback(state: AgentState) -> AgentState:
+    """Get user feedback via CLI input for iterative refinement."""
+    if state.get("_skip_feedback"):
+        logger.info("--skip_feedback set, skipping feedback step.")
+        return state
+    logger.info("Prompting user for feedback.")
+    feedback = input("\nEnter feedback or improvements (leave empty to skip):\n> ").strip()
+    return {"user_feedback": feedback if feedback else state.get("user_feedback", "")}
 
 
 def generate_code(state: AgentState) -> AgentState:
@@ -147,10 +162,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LangGraph Code Generator & Evaluator")
     parser.add_argument("--model", type=str, default=None,
                         help="LLM model name (overrides LLM_MODEL_NAME env var)")
-    parser.add_argument("--output", type=str, default="console",
-                        help="Output destination: 'console' (default) or a file path")
-    parser.add_argument("--log_file", type=str, default=None,
-                        help="Log file path to write logging output to")
+    parser.add_argument("-p", "--project_folder", required=True, type=str,
+                        help="Project folder path")
+    parser.add_argument("-u", "--user_prompt", type=str, default=None,
+                        help="Initial user prompt for code generation (skips interactive input)")
+    parser.add_argument("--skip_feedback", action="store_true", default=False,
+                        help="Skip asking the user for feedback during execution")
+    
     return parser.parse_args()
 
 
@@ -159,22 +177,24 @@ def main():
     args = parse_args()
 
     # Set up log file if specified
-    if args.log_file:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s : %(message)s",
-            handlers=[
-                logging.FileHandler(args.log_file),
-                logging.StreamHandler()
-            ]
-        )
-        logger.info("Logging to file: %s", args.log_file)
-    else:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s : %(message)s",
-            handlers=[logging.StreamHandler()]
-        )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s : %(message)s",
+        handlers=[
+            logging.FileHandler(args.project_folder + "/workflow.log"),
+            logging.StreamHandler()
+        ]
+    )
+    logger.info("Logging to file: %s", args.project_folder + "/workflow.log")
+
+    # Initialize state with CLI args; prompt_user will fill user_description
+    initial_state: AgentState = {}
+    initial_state["project_folder"] = args.project_folder
+    initial_state["_user_prompt_arg"] = args.user_prompt
+    initial_state["_skip_feedback"] = args.skip_feedback
+
+    if args.model:
+        initial_state["model"] = args.model
 
     # Build the graph
     graph_builder = StateGraph(AgentState)
@@ -185,22 +205,25 @@ def main():
     graph_builder.add_node("run_code", run_code)
     graph_builder.add_node("evaluate", evaluate)
 
-    # Set entry point and edges (linear chain)
+    # Conditionally add feedback node if not skipped
+    if not args.skip_feedback:
+        graph_builder.add_node("prompt_user_feedback", prompt_user_feedback)
+
+    # Set entry point and edges (linear chain with optional feedback)
     graph_builder.set_entry_point("prompt_user")
     graph_builder.add_edge("prompt_user", "generate_code")
     graph_builder.add_edge("generate_code", "run_code")
-    graph_builder.add_edge("run_code", "evaluate")
+    
+    if not args.skip_feedback:
+        graph_builder.add_edge("run_code", "prompt_user_feedback")
+        graph_builder.add_edge("prompt_user_feedback", "evaluate")
+    else:
+        graph_builder.add_edge("run_code", "evaluate")
+    
     graph_builder.add_edge("evaluate", END)
 
     # Compile the graph
     app = graph_builder.compile()
-
-    # Initialize state with CLI args; prompt_user will fill user_description
-    initial_state: AgentState = {}
-    if args.model:
-        initial_state["model"] = args.model
-    if args.output and args.output != "console":
-        initial_state["output"] = args.output
 
     # Run the workflow
     print("=" * 60)
@@ -209,6 +232,11 @@ def main():
     print()
 
     result = app.invoke(initial_state)
+
+    # Initialize state with CLI args; prompt_user will fill user_description
+    initial_state: AgentState = {}
+    if args.model:
+        initial_state["model"] = args.model
 
     # Build and display results
     lines = []
@@ -237,13 +265,11 @@ def main():
     output_text = "\n".join(lines) + "\n"
 
     # Route output to file or console based on --output argument
-    output_mode = result.get("output", "console")
-    if output_mode and output_mode != "console":
-        Path(output_mode).write_text(output_text, encoding="utf-8")
-        Path(output_mode + "_code").write_text(result["generated_code"], encoding="utf-8")
-        print(f"Results written to {output_mode}")
-    else:
-        print(output_text)
+    project_folder = result.get("project_folder", "tmp")
+    Path(project_folder + "/results.txt").write_text(output_text, encoding="utf-8")
+    Path(project_folder + "/generated_code.py").write_text(result["generated_code"], encoding="utf-8")
+    print(f"Results written to {project_folder}")
+
 
 
 if __name__ == "__main__":
