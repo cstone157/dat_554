@@ -23,6 +23,8 @@ load_dotenv()
 class AgentState(TypedDict, total=False):
     """State schema for the code generation agent."""
     user_description: str
+    plan: str
+    plan_file_structure: str
     user_feedback: str
     generated_code: str
     execution_result: dict  # {stdout: str, stderr: str, returncode: int}
@@ -32,8 +34,14 @@ class AgentState(TypedDict, total=False):
 
 
 # Prompt templates
+PROMPT_PLANNER = ""
+PROMPT_TASKER = ""
 PROMPT_GENERATE_CODE = ""
 PROMPT_EVALUATE = ""
+with open(Path("agents/Agents_plan.md").resolve(), "r") as f:
+    PROMPT_PLANNER = f.read()
+with open(Path("agents/Agents_task.md").resolve(), "r") as f:
+    PROMPT_TASKER = f.read()
 with open(Path("agents/Agents_code.md").resolve(), "r") as f:
     PROMPT_GENERATE_CODE = f.read()
 with open(Path("agents/Agents_eval.md").resolve(), "r") as f:
@@ -62,21 +70,53 @@ def prompt_user_feedback(state: AgentState) -> AgentState:
     """Get user feedback via CLI input for iterative refinement."""
     if state.get("_skip_feedback"):
         logger.info("--skip_feedback set, skipping feedback step.")
-        return state
+        return {"user_feedback": state.get("user_feedback", ""), "_has_feedback": False}
     logger.info("Prompting user for feedback.")
     feedback = input("\nEnter feedback or improvements (leave empty to skip):\n> ").strip()
-    return {"user_feedback": feedback if feedback else state.get("user_feedback", "")}
+    has_feedback = bool(feedback)
+    return {"user_feedback": feedback if feedback else state.get("user_feedback", ""), "_has_feedback": has_feedback}
+
+
+def generate_plan(state: AgentState) -> AgentState:
+    """Generate a detailed implementation plan using LLM based on user description."""
+    llm_base_url = os.environ.get("LLM_BASE_URL", "")
+    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
+    llm_api_key = os.environ.get("LLM_API_KEY", "")
+    logger.info("Generating plan using LLM model: %s", llm_name)
+    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+
+    prompt = PROMPT_PLANNER.format(description=state["user_description"])
+    response = llm.invoke(prompt)
+    plan = response.content.strip()
+    logger.info("Generated plan")
+    
+    # Extract plan from markdown fences if present
+    match = re.search(r'```markdown\s*\n(.*?)\n```', plan, re.DOTALL)
+    if match:
+        plan = match.group(1).strip()
+    elif plan.startswith("```"):
+        lines = plan.strip().split("\n")
+        lines.pop(0)  # Remove ``` line
+        if lines[-1].strip() == "```":
+            lines.pop()  # Remove closing ``` line
+        plan = "\n".join(lines).strip()
+    logger.info("extracted plan from markdown fences if present")
+
+    return {"plan": plan}
 
 
 def generate_code(state: AgentState) -> AgentState:
-    """Generate Python code using LLM based on user description."""
+    """Generate Python code using LLM based on user description and plan."""
     llm_base_url = os.environ.get("LLM_BASE_URL", "")
     llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
     llm_api_key = os.environ.get("LLM_API_KEY", "")
     logger.info("Generating code using LLM model : %s", llm_name)
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
-    prompt = PROMPT_GENERATE_CODE.format(description=state["user_description"])
+    prompt = PROMPT_GENERATE_CODE.format(
+        description=state["user_description"],
+        plan=state.get("plan", "No plan provided.")
+    )
     response = llm.invoke(prompt)
     code = response.content.strip()
     logger.info("Generated code")
@@ -201,6 +241,7 @@ def main():
 
     # Add nodes
     graph_builder.add_node("prompt_user", prompt_user)
+    graph_builder.add_node("generate_plan", generate_plan)
     graph_builder.add_node("generate_code", generate_code)
     graph_builder.add_node("run_code", run_code)
     graph_builder.add_node("evaluate", evaluate)
@@ -209,14 +250,19 @@ def main():
     if not args.skip_feedback:
         graph_builder.add_node("prompt_user_feedback", prompt_user_feedback)
 
-    # Set entry point and edges (linear chain with optional feedback)
+    # Set entry point and edges (plan -> generate code -> run -> evaluate, with optional feedback loop)
     graph_builder.set_entry_point("prompt_user")
-    graph_builder.add_edge("prompt_user", "generate_code")
+    graph_builder.add_edge("prompt_user", "generate_plan")
+    graph_builder.add_edge("generate_plan", "generate_code")
     graph_builder.add_edge("generate_code", "run_code")
     
     if not args.skip_feedback:
         graph_builder.add_edge("run_code", "prompt_user_feedback")
-        graph_builder.add_edge("prompt_user_feedback", "evaluate")
+        graph_builder.add_conditional_edges(
+            "prompt_user_feedback",
+            lambda state: "generate_code" if state.get("_has_feedback") else "evaluate",
+            {"generate_code": "generate_code", "evaluate": "evaluate"},
+        )
     else:
         graph_builder.add_edge("run_code", "evaluate")
     
@@ -245,7 +291,11 @@ def main():
     lines.append("=" * 60)
     lines.append("\n📝 User Description:")
     lines.append(f"   {result['user_description']}")
-    lines.append("\n💻 Generated Code:")
+    lines.append("\n�️  Implementation Plan:")
+    lines.append("-" * 40)
+    lines.append(result.get("plan", "No plan generated."))
+    lines.append("-" * 40)
+    lines.append("\n�💻 Generated Code:")
     lines.append("-" * 40)
     lines.append(result["generated_code"])
     lines.append("-" * 40)
@@ -264,7 +314,14 @@ def main():
     lines.append("-" * 40)
     output_text = "\n".join(lines) + "\n"
 
-    # Route output to file or console based on --output argument
+    # Print to console
+    print(output_text)
+
+    # Write to log file via logger
+    for line in output_text.splitlines():
+        logger.info(line)
+
+    # Save results to files
     project_folder = result.get("project_folder", "tmp")
     Path(project_folder + "/results.txt").write_text(output_text, encoding="utf-8")
     Path(project_folder + "/generated_code.py").write_text(result["generated_code"], encoding="utf-8")
