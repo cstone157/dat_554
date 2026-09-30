@@ -22,8 +22,10 @@ load_dotenv()
 
 class AgentState(TypedDict, total=False):
     """State schema for the code generation agent."""
+    user_prompt: str
     user_description: str
     plan: str
+    tasks: str
     plan_file_structure: str
     user_feedback: str
     generated_code: str
@@ -55,8 +57,8 @@ def prompt_user(state: AgentState) -> AgentState:
         return state
 
     # Use --user_prompt argument if provided, otherwise ask interactively
-    if state.get("_user_prompt_arg"):
-        description = state["_user_prompt_arg"]
+    if state.get("user_prompt"):
+        description = state["user_prompt"]
         logger.info("Using --user_prompt argument: %s", description)
     else:
         description = input("Enter a Python function description:\n> ").strip()
@@ -102,7 +104,101 @@ def generate_plan(state: AgentState) -> AgentState:
         plan = "\n".join(lines).strip()
     logger.info("extracted plan from markdown fences if present")
 
+    # Save plan to project folder
+    project_folder = state.get("project_folder", ".")
+    docs_dir = Path(project_folder) / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    plan_file = docs_dir / "Plan.md"
+    plan_file.write_text(plan, encoding="utf-8")
+    logger.info("Plan saved to %s", plan_file)
+
     return {"plan": plan}
+
+
+def _extract_file_paths(text: str) -> list[str]:
+    """Extract file paths from plan text.
+
+    Looks for patterns like:
+    - `path/to/file.py` or `path\\to\\file.py`
+    - Lines like 'Create src/module.py' or 'File: src/module.py'
+    """
+    logger.info("Extracting file paths from plan.")
+    files: set[str] = set()
+    # Match backtick-enclosed paths (common in markdown plans)
+    for m in re.finditer(r'`([^/\s`]{2,}\.\w{1,6})`', text):
+        path = m.group(1).replace("\\", "/")
+        if not any(c in path for c in "=()[]{}|"):
+            files.add(path)
+    # Match common directives: 'Create X', 'Add X', 'File: X'
+    for m in re.finditer(r'(?:creat|add|file\s*[:–-])\s+[`’"]?([^/\s`’"()]{2,}\.\w{1,6})[`’"]?', text, re.IGNORECASE):
+        path = m.group(1).replace("\\", "/")
+        if not any(c in path for c in "=()[]{}|"):
+            files.add(path)
+    return sorted(files)
+
+
+def plan_to_files(state: AgentState) -> AgentState:
+    """Parse the generated plan, extract file paths, create directories and placeholder files."""
+    logger.info("Processing plan to create files.")
+    project_folder = state.get("project_folder", ".")
+    plan = state.get("plan", "")
+    if not plan:
+        logger.warning("No plan available; skipping plan_to_files.")
+        return {}
+
+    file_paths = _extract_file_paths(plan)
+    created: list[str] = []
+    for rel in file_paths:
+        full_path = Path(project_folder) / rel
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        if not full_path.exists():
+            # Write a TODO placeholder so the file exists
+            full_path.write_text(
+                f"# TODO: implement {rel}\n",
+                encoding="utf-8",
+            )
+            created.append(str(rel))
+
+    logger.info("Created %d files from plan: %s", len(created), created)
+    return {
+        "plan_file_structure": "\n".join(f"  - {f}" for f in created) if created else "No files to create.",
+    }
+
+
+def generate_tasks(state: AgentState) -> AgentState:
+    """Break the implementation plan into a list of actionable tasks using LLM."""
+    llm_base_url = os.environ.get("LLM_BASE_URL", "")
+    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
+    llm_api_key = os.environ.get("LLM_API_KEY", "")
+    logger.info("Generating tasks using LLM model: %s", llm_name)
+    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+
+    prompt = PROMPT_TASKER.format(plan=state.get("plan", "No plan provided."))
+    response = llm.invoke(prompt)
+    tasks = response.content.strip()
+    logger.info("Generated tasks")
+
+    # Extract tasks from markdown fences if present
+    match = re.search(r'```markdown\s*\n(.*?)\n```', tasks, re.DOTALL)
+    if match:
+        tasks = match.group(1).strip()
+    elif tasks.startswith("```"):
+        lines = tasks.strip().split("\n")
+        lines.pop(0)  # Remove opening fence
+        if lines[-1].strip() == "```":
+            lines.pop()  # Remove closing fence
+        tasks = "\n".join(lines).strip()
+    logger.info("extracted tasks from markdown fences if present")
+
+    # Save tasks to project folder
+    project_folder = state.get("project_folder", ".")
+    docs_dir = Path(project_folder) / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    tasks_file = docs_dir / "Task.md"
+    tasks_file.write_text(tasks, encoding="utf-8")
+    logger.info("Tasks saved to %s", tasks_file)
+
+    return {"tasks": tasks}
 
 
 def generate_code(state: AgentState) -> AgentState:
@@ -206,7 +302,7 @@ def parse_args() -> argparse.Namespace:
                         help="Project folder path")
     parser.add_argument("-u", "--user_prompt", type=str, default=None,
                         help="Initial user prompt for code generation (skips interactive input)")
-    parser.add_argument("--skip_feedback", action="store_true", default=False,
+    parser.add_argument("-s", "--skip_feedback", action="store_true", default=False,
                         help="Skip asking the user for feedback during execution")
     
     return parser.parse_args()
@@ -230,7 +326,7 @@ def main():
     # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
     initial_state["project_folder"] = args.project_folder
-    initial_state["_user_prompt_arg"] = args.user_prompt
+    initial_state["user_prompt"] = args.user_prompt
     initial_state["_skip_feedback"] = args.skip_feedback
 
     if args.model:
@@ -242,6 +338,8 @@ def main():
     # Add nodes
     graph_builder.add_node("prompt_user", prompt_user)
     graph_builder.add_node("generate_plan", generate_plan)
+    graph_builder.add_node("plan_to_files", plan_to_files)
+    graph_builder.add_node("generate_tasks", generate_tasks)
     graph_builder.add_node("generate_code", generate_code)
     graph_builder.add_node("run_code", run_code)
     graph_builder.add_node("evaluate", evaluate)
@@ -250,10 +348,12 @@ def main():
     if not args.skip_feedback:
         graph_builder.add_node("prompt_user_feedback", prompt_user_feedback)
 
-    # Set entry point and edges (plan -> generate code -> run -> evaluate, with optional feedback loop)
+    # Set entry point and edges (plan -> create files -> tasks -> generate code -> run -> evaluate, with optional feedback loop)
     graph_builder.set_entry_point("prompt_user")
     graph_builder.add_edge("prompt_user", "generate_plan")
-    graph_builder.add_edge("generate_plan", "generate_code")
+    graph_builder.add_edge("generate_plan", "plan_to_files")
+    graph_builder.add_edge("plan_to_files", "generate_tasks")
+    graph_builder.add_edge("generate_tasks", "generate_code")
     graph_builder.add_edge("generate_code", "run_code")
     
     if not args.skip_feedback:
@@ -294,7 +394,11 @@ def main():
     lines.append("\n�️  Implementation Plan:")
     lines.append("-" * 40)
     lines.append(result.get("plan", "No plan generated."))
+    lines.append("-" * 40)    
+    lines.append("\n✅ Tasks:")
     lines.append("-" * 40)
+    lines.append(result.get("tasks", "No tasks generated."))
+    lines.append("-" * 40)    
     lines.append("\n�💻 Generated Code:")
     lines.append("-" * 40)
     lines.append(result["generated_code"])
