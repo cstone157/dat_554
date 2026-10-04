@@ -2,6 +2,7 @@
 """LangGraph application that generates, runs, and evaluates Python code based on user description."""
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -25,7 +26,8 @@ class AgentState(TypedDict, total=False):
     user_prompt: str
     user_description: str
     plan: str
-    tasks: str
+    pending_tasks: list[dict]
+    completed_tasks: list[dict]
     plan_file_structure: str
     user_feedback: str
     generated_code: str
@@ -33,6 +35,8 @@ class AgentState(TypedDict, total=False):
     evaluation: str
     model: str
     project_folder: str
+    current_task_index: int
+    review_result: str  # "pass" | "fail" | "poor_score"
 
 
 # Prompt templates
@@ -165,6 +169,56 @@ def plan_to_files(state: AgentState) -> AgentState:
     }
 
 
+def parse_tasks(text: str) -> dict[str, list[dict]]:
+    """Parse LLM task output into pending and completed arrays.
+
+    Expected format from the LLM (per Agents_task.md prompt):
+        T1: Task title
+        Description of what needs to be done...
+        Priority: critical / high / medium / low
+        Effort: small / medium / large
+    """
+    pending: list[dict] = []
+    completed: list[dict] = []
+
+    for block in re.finditer(r'(T\d+\s*[:.]\s*.+?)(?=T\d+\s*[:.]|$)', text, re.DOTALL):
+        block_text = block.group(1).strip()
+
+        header_match = re.match(r'(T\d+)\s*[:.]\s*(.*)', block_text.split('\n')[0])
+        if not header_match:
+            continue
+
+        task_id = header_match.group(1)
+        title = header_match.group(2).strip()
+
+        body_lines = block_text.split('\n')[1:]
+        body = '\n'.join(body_lines).strip()
+
+        prio_match = re.search(r'Priority\s*[:.]\s*(\w+)', body, re.IGNORECASE)
+        priority = prio_match.group(1).lower() if prio_match else "medium"
+
+        effort_match = re.search(r'Effort\s*[:.]\s*(\w+)', body, re.IGNORECASE)
+        effort = effort_match.group(1).lower() if effort_match else "medium"
+
+        desc = re.sub(
+            r'\n?\s*(?:Priority|Effort)\s*[:.]\s*\w+',
+            '',
+            body,
+            flags=re.IGNORECASE
+        ).strip()
+        desc = ' '.join(desc.split()) if desc else ""
+
+        pending.append({
+            "id": task_id,
+            "title": title,
+            "description": desc,
+            "priority": priority,
+            "effort": effort,
+        })
+
+    return {"pending_tasks": pending, "completed_tasks": completed}
+
+
 def generate_tasks(state: AgentState) -> AgentState:
     """Break the implementation plan into a list of actionable tasks using LLM."""
     llm_base_url = os.environ.get("LLM_BASE_URL", "")
@@ -175,62 +229,210 @@ def generate_tasks(state: AgentState) -> AgentState:
 
     prompt = PROMPT_TASKER.format(plan=state.get("plan", "No plan provided."))
     response = llm.invoke(prompt)
-    tasks = response.content.strip()
+    tasks_text = response.content.strip()
     logger.info("Generated tasks")
 
     # Extract tasks from markdown fences if present
-    match = re.search(r'```markdown\s*\n(.*?)\n```', tasks, re.DOTALL)
+    match = re.search(r'```markdown\s*\n(.*?)\n```', tasks_text, re.DOTALL)
     if match:
-        tasks = match.group(1).strip()
-    elif tasks.startswith("```"):
-        lines = tasks.strip().split("\n")
+        tasks_text = match.group(1).strip()
+    elif tasks_text.startswith("```"):
+        lines = tasks_text.strip().split("\n")
         lines.pop(0)  # Remove opening fence
         if lines[-1].strip() == "```":
             lines.pop()  # Remove closing fence
-        tasks = "\n".join(lines).strip()
+        tasks_text = "\n".join(lines).strip()
     logger.info("extracted tasks from markdown fences if present")
 
-    # Save tasks to project folder
+    # Parse tasks into structured pending/completed arrays
+    parsed_tasks = parse_tasks(tasks_text)
+
+    # Save structured tasks to project folder as JSON
     project_folder = state.get("project_folder", ".")
     docs_dir = Path(project_folder) / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
-    tasks_file = docs_dir / "Task.md"
-    tasks_file.write_text(tasks, encoding="utf-8")
-    logger.info("Tasks saved to %s", tasks_file)
+    tasks_file = docs_dir / "Tasks.json"
+    tasks_file.write_text(json.dumps(parsed_tasks, indent=2), encoding="utf-8")
+    logger.info("Structured tasks saved to %s", tasks_file)
 
-    return {"tasks": tasks}
+    return parsed_tasks
 
 
 def generate_code(state: AgentState) -> AgentState:
-    """Generate Python code using LLM based on user description and plan."""
+    """Generate Python code for a single task using LLM.
+
+    Reads current_task_index from state to determine which pending task
+    to work on. Writes the generated code directly to the appropriate
+    file in project_folder.
+    """
     llm_base_url = os.environ.get("LLM_BASE_URL", "")
     llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
     llm_api_key = os.environ.get("LLM_API_KEY", "")
-    logger.info("Generating code using LLM model : %s", llm_name)
+    logger.info("Generating code for single task using LLM model: %s", llm_name)
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
-    prompt = PROMPT_GENERATE_CODE.format(
-        description=state["user_description"],
-        plan=state.get("plan", "No plan provided.")
+    project_folder = state.get("project_folder", ".")
+    description = state["user_description"]
+    plan = state.get("plan", "No plan provided.")
+    pending_tasks: list[dict] = list(state.get("pending_tasks", []))
+    completed_tasks: list[dict] = list(state.get("completed_tasks", []))
+    current_idx = state.get("current_task_index", 0)
+
+    # Guard against index out of range (shouldn't happen if graph is correct, but safety first)
+    if current_idx >= len(pending_tasks):
+        logger.warning("current_task_index %d >= len(pending_tasks) %d; no task to generate", current_idx, len(pending_tasks))
+        return {"generated_code": "", "review_result": "pass"}  # signal: nothing to do
+
+    task = pending_tasks[current_idx]
+    task_id = task.get("id", "?")
+    title = task.get("title", "Untitled")
+    desc = task.get("description", "")
+
+    logger.info("Generating code for task %d: %s (%s)", current_idx, title, desc)
+
+    # --- Determine output file path from task description or plan ---
+    filepath: str | None = None
+    if match := re.search(r'`([^/\s`]{2,}\.\w{1,6})`', desc):
+        filepath = match.group(1).replace("\\", "/")
+    if not filepath:
+        for m in re.finditer(r'`([^/\s`]{2,}\.\w{1,6})`', plan):
+            candidate = m.group(1).replace("\\", "/")
+            if not any(c in candidate for c in "=()[]{}|"):
+                filepath = candidate
+                break
+    if not filepath:
+        filepath = "generated_code.py"
+    out_path = Path(project_folder) / filepath
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Build per-task prompt ---
+    task_prompt = PROMPT_GENERATE_CODE.format(
+        description=description,
+        plan=f"{plan}\n\nCurrent task to implement: {task_id}: {title}\n  {desc}"
     )
-    response = llm.invoke(prompt)
+    response = llm.invoke(task_prompt)
     code = response.content.strip()
-    logger.info("Generated code")
-    
-    # Extract code from markdown fences if present
+
+    # --- Extract code from markdown fences if present ---
     match = re.search(r'```python\s*\n(.*?)\n```', code, re.DOTALL)
     if match:
         code = match.group(1).strip()
     elif code.startswith("```"):
-        # Remove opening and closing fences even without language specifier
         lines = code.strip().split("\n")
         lines.pop(0)  # Remove ``` line
         if lines[-1].strip() == "```":
             lines.pop()  # Remove closing ``` line
         code = "\n".join(lines).strip()
-    logger.info("extracted code from markdown fences if present")
+    logger.info("extracted code from markdown fences for %s", task_id)
 
-    return {"generated_code": code}
+    # --- Write generated code to the appropriate file ---
+    out_path.write_text(code, encoding="utf-8")
+    logger.info("Wrote %s (%s) to %s", task_id, title, out_path)
+
+    return {
+        "generated_code": code,
+        "pending_tasks": pending_tasks,  # unchanged; current task stays until reviewed
+        "completed_tasks": completed_tasks,
+    }
+
+
+def check_and_advance_tasks(state: AgentState) -> AgentState:
+    """Advance to the next pending task (increment index, reset per-task state)."""
+    pending_tasks: list[dict] = list(state.get("pending_tasks", []))
+    completed_tasks: list[dict] = list(state.get("completed_tasks", []))
+    current_idx = state.get("current_task_index", 0)
+
+    # Move the task from pending to completed
+    if current_idx < len(pending_tasks):
+        completed_tasks.append(pending_tasks[current_idx])
+        logger.info("Moved task %d (%s) to completed", current_idx, pending_tasks[current_idx].get("title"))
+
+    next_idx = current_idx + 1
+    logger.info("Advancing to next task index: %d (pending=%d, completed=%d)",
+                next_idx, len(pending_tasks), len(completed_tasks))
+
+    return {
+        "current_task_index": next_idx,
+        "pending_tasks": pending_tasks,
+        "completed_tasks": completed_tasks,
+        "review_result": None,  # reset
+    }
+
+
+def review_and_route(state: AgentState) -> AgentState:
+    """Review execution and evaluation results; decide route path.
+
+    Returns a review_result string that the conditional edges use:
+      - "fail"   : code failed to run → route back to generate_code
+      - "poor"   : evaluation score too low → route back to generate_code
+      - "pass"   : all good → advance to next task or END
+    """
+    exec_result = state.get("execution_result", {})
+    returncode = exec_result.get("returncode", -1)
+    stderr = exec_result.get("stderr", "")
+    evaluation = state.get("evaluation", "")
+
+    # Check 1: Did the code run successfully?
+    if returncode != 0:
+        logger.warning("Code failed to run (returncode=%d, stderr=%s); routing back to generate_code", returncode, stderr[:200])
+        return {"review_result": "fail"}
+
+    # Check 2: Evaluate score from the evaluation text
+    # Extract numeric score if present (e.g., "Score: 7/10" or just a number)
+    score_match = re.search(r'(\d+\.?\d*)', evaluation)
+    if not score_match:
+        # No explicit score — do a basic keyword check on the LLM output
+        score = _evaluate_score(evaluation)
+    else:
+        score = float(score_match.group(1))
+        # Heuristic: if score is very small it might be part of prose, not a 0-10 rating
+        if score < 0.1 or (score > 50 and "/" not in evaluation):
+            score = _evaluate_score(evaluation)
+
+    logger.info("Evaluation score: %.1f", score)
+    threshold = float(os.environ.get("EVAL_THRESHOLD", "7.0"))
+
+    if score < threshold:
+        logger.warning("Evaluation score %.1f below threshold %.1f; routing back to generate_code",
+                       score, threshold)
+        return {"review_result": "poor"}
+
+    logger.info("Review passed (score=%.1f >= %.1f); advancing task", score, threshold)
+    return {"review_result": "pass"}
+
+
+def _evaluate_score(evaluation: str) -> float:
+    """Heuristically extract a 0-10 score from an LLM evaluation text.
+
+    Returns 9.0 (pass) if no clear signal of failure is found.
+    """
+    eval_lower = evaluation.lower()
+    # Explicit bad keywords
+    for kw in ["critical error", "fatal error", "syntax error", "does not work",
+               "broken", "non-functional", "unacceptable", "failing"]:
+        if kw in eval_lower:
+            return 3.0
+    # Explicit good keywords
+    for kw in ["works correctly", "fully functional", "passes all", "excellent", "perfect"]:
+        if kw in eval_lower:
+            return 9.0
+    # Fallback: look for any number that could be a score (heuristic)
+    numbers = re.findall(r'\b(\d{1,2})\.?\d*\b', evaluation)
+    if numbers:
+        num = float(numbers[0])
+        if 0 <= num <= 10:
+            return num
+    # Default to pass
+    return 9.0
+
+
+def _has_more_pending(state: AgentState) -> bool:
+    """Check if there are more pending tasks to process."""
+    pending_tasks: list[dict] = state.get("pending_tasks", [])
+    current_idx = state.get("current_task_index", 0)
+    has_more = current_idx < len(pending_tasks)
+    logger.info("has_more_pending: %s (idx=%d, total=%d)", has_more, current_idx, len(pending_tasks))
+    return has_more
 
 
 def run_code(state: AgentState) -> AgentState:
@@ -304,6 +506,10 @@ def parse_args() -> argparse.Namespace:
                         help="Initial user prompt for code generation (skips interactive input)")
     parser.add_argument("-s", "--skip_feedback", action="store_true", default=False,
                         help="Skip asking the user for feedback during execution")
+    parser.add_argument("--eval_threshold", type=float, default=None,
+                        help="Minimum evaluation score (0-10) to pass review. Can also be set via EVAL_THRESHOLD env var.")
+    parser.add_argument("--max_retries", type=int, default=5,
+                        help="Maximum number of code regeneration attempts per task (default: 5)")
     
     return parser.parse_args()
 
@@ -311,6 +517,10 @@ def parse_args() -> argparse.Namespace:
 def main():
     """Main entry point: build and run the LangGraph workflow."""
     args = parse_args()
+
+    # Set EVAL_THRESHOLD env var if user passed --eval_threshold
+    if args.eval_threshold is not None:
+        os.environ["EVAL_THRESHOLD"] = str(args.eval_threshold)
 
     # Set up log file if specified
     logging.basicConfig(
@@ -328,6 +538,7 @@ def main():
     initial_state["project_folder"] = args.project_folder
     initial_state["user_prompt"] = args.user_prompt
     initial_state["_skip_feedback"] = args.skip_feedback
+    initial_state["current_task_index"] = 0
 
     if args.model:
         initial_state["model"] = args.model
@@ -343,30 +554,40 @@ def main():
     graph_builder.add_node("generate_code", generate_code)
     graph_builder.add_node("run_code", run_code)
     graph_builder.add_node("evaluate", evaluate)
+    graph_builder.add_node("review_and_route", review_and_route)
+    graph_builder.add_node("check_and_advance_tasks", check_and_advance_tasks)
 
-    # Conditionally add feedback node if not skipped
-    if not args.skip_feedback:
-        graph_builder.add_node("prompt_user_feedback", prompt_user_feedback)
-
-    # Set entry point and edges (plan -> create files -> tasks -> generate code -> run -> evaluate, with optional feedback loop)
+    # Set entry point
     graph_builder.set_entry_point("prompt_user")
+    
+    # Linear flow: prompt → plan → files → tasks → generate_code → run → evaluate → review → advance/end
     graph_builder.add_edge("prompt_user", "generate_plan")
     graph_builder.add_edge("generate_plan", "plan_to_files")
     graph_builder.add_edge("plan_to_files", "generate_tasks")
     graph_builder.add_edge("generate_tasks", "generate_code")
     graph_builder.add_edge("generate_code", "run_code")
-    
-    if not args.skip_feedback:
-        graph_builder.add_edge("run_code", "prompt_user_feedback")
-        graph_builder.add_conditional_edges(
-            "prompt_user_feedback",
-            lambda state: "generate_code" if state.get("_has_feedback") else "evaluate",
-            {"generate_code": "generate_code", "evaluate": "evaluate"},
-        )
-    else:
-        graph_builder.add_edge("run_code", "evaluate")
-    
-    graph_builder.add_edge("evaluate", END)
+    graph_builder.add_edge("run_code", "evaluate")
+    graph_builder.add_edge("evaluate", "review_and_route")
+
+    # Conditional edges from review_and_route:
+    #   "fail" or "poor" → generate_code (retry current task)
+    #   "pass"           → check_and_advance_tasks (move to next task or END)
+    graph_builder.add_conditional_edges(
+        "review_and_route",
+        lambda state: state.get("review_result", "pass"),
+        {
+            "fail": "generate_code",
+            "poor": "generate_code",
+            "pass": "check_and_advance_tasks",
+        },
+    )
+
+    # After advancing, decide: more tasks? loop back to generate_code. Done? END.
+    graph_builder.add_conditional_edges(
+        "check_and_advance_tasks",
+        lambda state: _has_more_pending(state),
+        {True: "generate_code", False: END},
+    )
 
     # Compile the graph
     app = graph_builder.compile()
@@ -379,11 +600,6 @@ def main():
 
     result = app.invoke(initial_state)
 
-    # Initialize state with CLI args; prompt_user will fill user_description
-    initial_state: AgentState = {}
-    if args.model:
-        initial_state["model"] = args.model
-
     # Build and display results
     lines = []
     lines.append("\n" + "=" * 60)
@@ -395,10 +611,19 @@ def main():
     lines.append("-" * 40)
     lines.append(result.get("plan", "No plan generated."))
     lines.append("-" * 40)    
-    lines.append("\n✅ Tasks:")
-    lines.append("-" * 40)
-    lines.append(result.get("tasks", "No tasks generated."))
-    lines.append("-" * 40)    
+    pending = result.get("pending_tasks", [])
+    completed = result.get("completed_tasks", [])
+    if pending or completed:
+        lines.append("\n✅ Tasks:")
+        if pending:
+            lines.append("   Pending:")
+            for task in pending:
+                lines.append(f"      [{task.get('id', '?')}] {task.get('title', 'Untitled')}")
+        if completed:
+            lines.append("   Completed:")
+            for task in completed:
+                lines.append(f"      [{task.get('id', '?')}] {task.get('title', 'Untitled')}")
+        lines.append("-" * 40)    
     lines.append("\n�💻 Generated Code:")
     lines.append("-" * 40)
     lines.append(result["generated_code"])
