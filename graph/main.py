@@ -8,36 +8,19 @@ import os
 import re
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
-from typing import TypedDict
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
+from utils.state import AgentState
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
-
-
-class AgentState(TypedDict, total=False):
-    """State schema for the code generation agent."""
-    user_prompt: str
-    user_description: str
-    plan: str
-    pending_tasks: list[dict]
-    completed_tasks: list[dict]
-    plan_file_structure: str
-    user_feedback: str
-    generated_code: str
-    execution_result: dict  # {stdout: str, stderr: str, returncode: int}
-    evaluation: str
-    model: str
-    project_folder: str
-    current_task_index: int
-    review_result: str  # "pass" | "fail" | "poor_score"
-
 
 # Prompt templates
 PROMPT_PLANNER = ""
@@ -288,7 +271,10 @@ def generate_code(state: AgentState) -> AgentState:
     title = task.get("title", "Untitled")
     desc = task.get("description", "")
 
-    logger.info("Generating code for task %d: %s (%s)", current_idx, title, desc)
+    # Increment attempt counter for this task
+    task_attempts = state.get("task_attempts", 0) + 1
+    max_retries = state.get("max_retries", 5)
+    logger.info("Generating code for task %d: %s (%s) - attempt %d/%d", current_idx, title, desc, task_attempts, max_retries)
 
     # --- Determine output file path from task description or plan ---
     filepath: str | None = None
@@ -333,6 +319,7 @@ def generate_code(state: AgentState) -> AgentState:
         "generated_code": code,
         "pending_tasks": pending_tasks,  # unchanged; current task stays until reviewed
         "completed_tasks": completed_tasks,
+        "task_attempts": task_attempts,
     }
 
 
@@ -356,6 +343,7 @@ def check_and_advance_tasks(state: AgentState) -> AgentState:
         "pending_tasks": pending_tasks,
         "completed_tasks": completed_tasks,
         "review_result": None,  # reset
+        "task_attempts": 0,  # reset attempt counter for the new task
     }
 
 
@@ -363,10 +351,27 @@ def review_and_route(state: AgentState) -> AgentState:
     """Review execution and evaluation results; decide route path.
 
     Returns a review_result string that the conditional edges use:
-      - "fail"   : code failed to run → route back to generate_code
-      - "poor"   : evaluation score too low → route back to generate_code
-      - "pass"   : all good → advance to next task or END
+      - "fail"              : code failed to run → route back to generate_code
+      - "poor"              : evaluation score too low → route back to generate_code
+      - "max_retries_exceeded": retry limit reached for this task → advance to next task
+      - "pass"              : all good → advance to next task or END
     """
+    task_attempts = state.get("task_attempts", 0)
+    max_retries = state.get("max_retries", 5)
+
+    # Check if we've exceeded the maximum number of retries
+    if task_attempts >= max_retries:
+        pending_tasks = state.get("pending_tasks", [])
+        current_idx = state.get("current_task_index", 0)
+        if current_idx < len(pending_tasks):
+            task_info = pending_tasks[current_idx]
+            logger.error(
+                "Max retries (%d) exceeded for task %d (%s); skipping to next task",
+                max_retries, current_idx, task_info.get("title", "Untitled")
+            )
+            return {"review_result": "max_retries_exceeded"}
+        return {"review_result": "pass"}
+
     exec_result = state.get("execution_result", {})
     returncode = exec_result.get("returncode", -1)
     stderr = exec_result.get("stderr", "")
@@ -504,6 +509,8 @@ def parse_args() -> argparse.Namespace:
                         help="Project folder path")
     parser.add_argument("-u", "--user_prompt", type=str, default=None,
                         help="Initial user prompt for code generation (skips interactive input)")
+    parser.add_argument("-i", "--id", type=str, default=None, dest="agent_id",
+                        help="Unique identifier for this agent run (auto-generated if not provided)")
     parser.add_argument("-s", "--skip_feedback", action="store_true", default=False,
                         help="Skip asking the user for feedback during execution")
     parser.add_argument("--eval_threshold", type=float, default=None,
@@ -514,6 +521,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class AgentIDFilter(logging.Filter):
+    """Logging filter to inject agent_id into log records."""
+    def __init__(self, agent_id: str):
+        super().__init__()
+        self.agent_id = agent_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.agent_id = self.agent_id
+        return True
+
+
 def main():
     """Main entry point: build and run the LangGraph workflow."""
     args = parse_args()
@@ -522,15 +540,20 @@ def main():
     if args.eval_threshold is not None:
         os.environ["EVAL_THRESHOLD"] = str(args.eval_threshold)
 
-    # Set up log file if specified
+    # Generate or use provided unique ID
+    agent_id = args.agent_id or str(uuid.uuid4())[:8]
+
+    # Set up log file with agent_id in format
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s : %(message)s",
+        format="'%(asctime)s', '[%(agent_id)s]', '%(levelname)s', '%(message)s'",
         handlers=[
             logging.FileHandler(args.project_folder + "/workflow.log"),
             logging.StreamHandler()
         ]
     )
+    # Inject agent_id into all log records from this logger
+    logger.addFilter(AgentIDFilter(agent_id))
     logger.info("Logging to file: %s", args.project_folder + "/workflow.log")
 
     # Initialize state with CLI args; prompt_user will fill user_description
@@ -539,9 +562,13 @@ def main():
     initial_state["user_prompt"] = args.user_prompt
     initial_state["_skip_feedback"] = args.skip_feedback
     initial_state["current_task_index"] = 0
+    initial_state["agent_id"] = agent_id
 
     if args.model:
         initial_state["model"] = args.model
+
+    initial_state["max_retries"] = args.max_retries
+    initial_state["task_attempts"] = 0
 
     # Build the graph
     graph_builder = StateGraph(AgentState)
@@ -570,14 +597,15 @@ def main():
     graph_builder.add_edge("evaluate", "review_and_route")
 
     # Conditional edges from review_and_route:
-    #   "fail" or "poor" → generate_code (retry current task)
-    #   "pass"           → check_and_advance_tasks (move to next task or END)
+    #   "fail" or "poor"              → generate_code (retry current task)
+    #   "max_retries_exceeded" or "pass" → check_and_advance_tasks (move to next task or END)
     graph_builder.add_conditional_edges(
         "review_and_route",
         lambda state: state.get("review_result", "pass"),
         {
             "fail": "generate_code",
             "poor": "generate_code",
+            "max_retries_exceeded": "check_and_advance_tasks",
             "pass": "check_and_advance_tasks",
         },
     )
