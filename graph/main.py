@@ -16,8 +16,19 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
 from utils.state import AgentState
+from utils.user_nodes import prompt_user, prompt_user_feedback
+from utils.LogFilter import LogFilter
+
+
+# Set up log file with agent_id in format
+logging.basicConfig(
+    level=logging.INFO,
+    format="'%(asctime)s', '[%(agent_id)s]', '%(levelname)s', '%(message)s'",
+)
 
 logger = logging.getLogger(__name__)
+session_filter = LogFilter()
+logger.addFilter(session_filter)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,33 +48,6 @@ with open(Path("agents/Agents_eval.md").resolve(), "r") as f:
     PROMPT_EVALUATE = f.read()
 
 
-def prompt_user(state: AgentState) -> AgentState:
-    """Get user description via CLI input."""
-    logger.info("Prompting user for Python function description.")
-    if state.get("user_description"):
-        return state
-
-    # Use --user_prompt argument if provided, otherwise ask interactively
-    if state.get("user_prompt"):
-        description = state["user_prompt"]
-        logger.info("Using --user_prompt argument: %s", description)
-    else:
-        description = input("Enter a Python function description:\n> ").strip()
-        while not description:
-            description = input("Description cannot be empty. Enter a Python function description:\n> ").strip()
-        logger.info("User provided description : %s", description)
-    return {"user_description": description}
-
-
-def prompt_user_feedback(state: AgentState) -> AgentState:
-    """Get user feedback via CLI input for iterative refinement."""
-    if state.get("_skip_feedback"):
-        logger.info("--skip_feedback set, skipping feedback step.")
-        return {"user_feedback": state.get("user_feedback", ""), "_has_feedback": False}
-    logger.info("Prompting user for feedback.")
-    feedback = input("\nEnter feedback or improvements (leave empty to skip):\n> ").strip()
-    has_feedback = bool(feedback)
-    return {"user_feedback": feedback if feedback else state.get("user_feedback", ""), "_has_feedback": has_feedback}
 
 
 def generate_plan(state: AgentState) -> AgentState:
@@ -542,19 +526,17 @@ def main():
 
     # Generate or use provided unique ID
     agent_id = args.agent_id or str(uuid.uuid4())[:8]
+    session_filter.set_agent_id(agent_id)
 
+    # Inject agent_id into all log records from this logger
     # Set up log file with agent_id in format
     logging.basicConfig(
-        level=logging.INFO,
-        format="'%(asctime)s', '[%(agent_id)s]', '%(levelname)s', '%(message)s'",
         handlers=[
             logging.FileHandler(args.project_folder + "/workflow.log"),
             logging.StreamHandler()
         ]
     )
-    # Inject agent_id into all log records from this logger
-    logger.addFilter(AgentIDFilter(agent_id))
-    logger.info("Logging to file: %s", args.project_folder + "/workflow.log")
+    logger.info("Logging to file: %s", args.project_folder + "/workflow.log", extra={"agent_id": agent_id})
 
     # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
