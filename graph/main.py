@@ -15,20 +15,11 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
+from utils.LogFilter import setup_global_logging, set_global_agent_id, add_file_handler
 from utils.state import AgentState
 from utils.user_nodes import prompt_user, prompt_user_feedback
-from utils.LogFilter import LogFilter
-
-
-# Set up log file with agent_id in format
-logging.basicConfig(
-    level=logging.INFO,
-    format="'%(asctime)s', '[%(agent_id)s]', '%(levelname)s', '%(message)s'",
-)
 
 logger = logging.getLogger(__name__)
-session_filter = LogFilter()
-logger.addFilter(session_filter)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -505,16 +496,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-class AgentIDFilter(logging.Filter):
-    """Logging filter to inject agent_id into log records."""
-    def __init__(self, agent_id: str):
-        super().__init__()
-        self.agent_id = agent_id
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.agent_id = self.agent_id
-        return True
-
 
 def main():
     """Main entry point: build and run the LangGraph workflow."""
@@ -526,17 +507,15 @@ def main():
 
     # Generate or use provided unique ID
     agent_id = args.agent_id or str(uuid.uuid4())[:8]
-    session_filter.set_agent_id(agent_id)
 
-    # Inject agent_id into all log records from this logger
-    # Set up log file with agent_id in format
-    logging.basicConfig(
-        handlers=[
-            logging.FileHandler(args.project_folder + "/workflow.log"),
-            logging.StreamHandler()
-        ]
-    )
-    logger.info("Logging to file: %s", args.project_folder + "/workflow.log", extra={"agent_id": agent_id})
+    # Set up global logging with agent_id on the root logger
+    # so all modules (user_nodes, graph, state, etc.) inherit it.
+    setup_global_logging()
+    set_global_agent_id(agent_id)
+
+    # Add file handler with the same AgentFormatter
+    add_file_handler(args.project_folder + "/workflow.log")
+    logger.info("Logging to file: %s", args.project_folder + "/workflow.log")
 
     # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
