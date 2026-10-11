@@ -418,6 +418,7 @@ def _has_more_pending(state: AgentState) -> bool:
 def run_code(state: AgentState) -> AgentState:
     """Write generated code to a temp file and execute it."""
     logger.info("Running generated code.")
+    project_folder = state.get("project_folder", ".")
     code = state["generated_code"]
 
     # Write to temporary file
@@ -426,12 +427,13 @@ def run_code(state: AgentState) -> AgentState:
         temp_path = f.name
 
     try:
-        # Execute the code
+        # Execute the code in the project folder so files land there
         result = subprocess.run(
             ["python3", temp_path],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
+            cwd=project_folder,
         )
         execution_result = {
             "stdout": result.stdout,
