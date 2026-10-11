@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
-from utils.LogFilter import setup_global_logging, set_global_agent_id, add_file_handler
+from utils.log_filter import setup_global_logging, set_global_agent_id, add_file_handler
 from utils.state import AgentState
 from utils.user_nodes import prompt_user, prompt_user_feedback
 
@@ -25,19 +25,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Prompt templates
-PROMPT_PLANNER = ""
-PROMPT_TASKER = ""
-PROMPT_GENERATE_CODE = ""
-PROMPT_EVALUATE = ""
-with open(Path("agents/Agents_plan.md").resolve(), "r") as f:
-    PROMPT_PLANNER = f.read()
-with open(Path("agents/Agents_task.md").resolve(), "r") as f:
-    PROMPT_TASKER = f.read()
-with open(Path("agents/Agents_code.md").resolve(), "r") as f:
-    PROMPT_GENERATE_CODE = f.read()
-with open(Path("agents/Agents_eval.md").resolve(), "r") as f:
-    PROMPT_EVALUATE = f.read()
-
+PROMPTS = {
+    path.stem[len("Agents_"):]: path.read_text(encoding="utf-8")
+    for path in Path("agents").glob("Agents_*.md")
+}
 
 
 
@@ -49,7 +40,7 @@ def generate_plan(state: AgentState) -> AgentState:
     logger.info("Generating plan using LLM model: %s", llm_name)
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
-    prompt = PROMPT_PLANNER.format(description=state["user_description"])
+    prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
     response = llm.invoke(prompt)
     plan = response.content.strip()
     logger.info("Generated plan")
@@ -185,7 +176,7 @@ def generate_tasks(state: AgentState) -> AgentState:
     logger.info("Generating tasks using LLM model: %s", llm_name)
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
-    prompt = PROMPT_TASKER.format(plan=state.get("plan", "No plan provided."))
+    prompt = PROMPTS.get("task", "").format(plan=state.get("plan", "No plan provided."))
     response = llm.invoke(prompt)
     tasks_text = response.content.strip()
     logger.info("Generated tasks")
@@ -267,7 +258,7 @@ def generate_code(state: AgentState) -> AgentState:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # --- Build per-task prompt ---
-    task_prompt = PROMPT_GENERATE_CODE.format(
+    task_prompt = PROMPTS.get("code", "").format(
         description=description,
         plan=f"{plan}\n\nCurrent task to implement: {task_id}: {title}\n  {desc}"
     )
@@ -421,6 +412,16 @@ def run_code(state: AgentState) -> AgentState:
     project_folder = state.get("project_folder", ".")
     code = state["generated_code"]
 
+    # Determine the Python interpreter (venv if available, else python3)
+    venv_dir = Path(project_folder) / ".venv"
+    if venv_dir.exists():
+        if os.name == "nt":
+            python_exe = str(venv_dir / "Scripts" / "python.exe")
+        else:
+            python_exe = str(venv_dir / "bin" / "python")
+    else:
+        python_exe = "python3"
+
     # Write to temporary file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, dir="/tmp") as f:
         f.write(code)
@@ -429,7 +430,7 @@ def run_code(state: AgentState) -> AgentState:
     try:
         # Execute the code in the project folder so files land there
         result = subprocess.run(
-            ["python3", temp_path],
+            [python_exe, temp_path],
             capture_output=True,
             text=True,
             timeout=30,
@@ -464,7 +465,7 @@ def evaluate(state: AgentState) -> AgentState:
     llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
 
     execution = state["execution_result"]
-    prompt = PROMPT_EVALUATE.format(
+    prompt = PROMPTS.get("eval", "").format(
         description=state["user_description"],
         code=state["generated_code"],
         stdout=execution.get("stdout", ""),
@@ -499,6 +500,42 @@ def parse_args() -> argparse.Namespace:
 
 
 
+def _create_venv(project_folder: str) -> str:
+    """Create a Python virtual environment in the project folder if it doesn't exist.
+
+    Returns the path to the venv's Python interpreter.
+    """
+    venv_dir = Path(project_folder) / ".venv"
+    requirements_file = Path(__file__).parent / "requirements.txt"
+
+    if not venv_dir.exists():
+        logger.info("Creating virtual environment in %s", venv_dir)
+        subprocess.run(
+            ["python3", "-m", "venv", str(venv_dir)],
+            check=True,
+            capture_output=True,
+        )
+
+    # Determine the Python executable for this platform
+    if os.name == "nt":  # Windows
+        python_exe = venv_dir / "Scripts" / "python.exe"
+        pip_exe = venv_dir / "Scripts" / "pip.exe"
+    else:
+        python_exe = venv_dir / "bin" / "python"
+        pip_exe = venv_dir / "bin" / "pip"
+
+    # Install requirements if the file exists and the venv is fresh
+    if requirements_file.exists():
+        logger.info("Installing requirements from %s", requirements_file)
+        subprocess.run(
+            [str(pip_exe), "install", "-r", str(requirements_file)],
+            check=True,
+            capture_output=True,
+        )
+
+    return str(python_exe)
+
+
 def main():
     """Main entry point: build and run the LangGraph workflow."""
     args = parse_args()
@@ -509,6 +546,10 @@ def main():
 
     # Generate or use provided unique ID
     agent_id = args.agent_id or str(uuid.uuid4())[:8]
+
+    # Create and configure virtual environment for generated code execution
+    venv_python = _create_venv(args.project_folder)
+    logger.info("Virtual environment Python: %s", venv_python)
 
     # Set up global logging with agent_id on the root logger
     # so all modules (user_nodes, graph, state, etc.) inherit it.
@@ -637,14 +678,14 @@ def main():
     # Print to console
     print(output_text)
 
-    # Write to log file via logger
-    for line in output_text.splitlines():
-        logger.info(line)
+    # # Write to log file via logger
+    # for line in output_text.splitlines():
+    #     logger.info(line)
 
     # Save results to files
     project_folder = result.get("project_folder", "tmp")
     Path(project_folder + "/results.txt").write_text(output_text, encoding="utf-8")
-    Path(project_folder + "/generated_code.py").write_text(result["generated_code"], encoding="utf-8")
+    # Path(project_folder + "/generated_code.py").write_text(result["generated_code"], encoding="utf-8")
     print(f"Results written to {project_folder}")
 
 
