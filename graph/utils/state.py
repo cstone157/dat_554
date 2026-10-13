@@ -12,7 +12,6 @@ class AgentState(TypedDict, total=False):
     generated_code: str
     execution_result: dict  # {stdout: str, stderr: str, returncode: int}
     evaluation: str
-    model: str
     project_folder: str
     current_task_index: int
     review_result: str  # "pass" | "fail" | "poor_score"

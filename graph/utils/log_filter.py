@@ -1,6 +1,6 @@
 import logging
 
-_LOG_FORMAT = "'%(asctime)s', '[%(agent_id)s]', '%(levelname)s', '%(message)s'"
+_LOG_FORMAT = "\"%(asctime)s\", \"[%(agent_id)s]\", \"%(levelname)s\", \"%(message)s\""
 
 
 class AgentFormatter(logging.Formatter):
@@ -18,6 +18,11 @@ class AgentFormatter(logging.Formatter):
     def format(self, record):
         if not hasattr(record, "agent_id"):
             record.agent_id = self.agent_id
+        # Escape double quotes in the message to preserve log format integrity
+        msg_text = (record.msg % record.args) if record.args else str(record.msg)
+        if '"' in msg_text:
+            record.msg = msg_text.replace('"', '\\"')
+            record.args = ()
         return super().format(record)
 
 

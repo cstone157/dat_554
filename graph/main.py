@@ -12,9 +12,11 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 
+from utils.config import PROMPTS
+from utils.files import update_work_dir, write_plan
+from utils.llm import get_llm, update_llm_config
 from utils.log_filter import setup_global_logging, set_global_agent_id, add_file_handler
 from utils.state import AgentState
 from utils.user_nodes import prompt_user, prompt_user_feedback
@@ -24,21 +26,11 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
-# Prompt templates
-PROMPTS = {
-    path.stem[len("Agents_"):]: path.read_text(encoding="utf-8")
-    for path in Path("agents").glob("Agents_*.md")
-}
-
-
 
 def generate_plan(state: AgentState) -> AgentState:
     """Generate a detailed implementation plan using LLM based on user description."""
-    llm_base_url = os.environ.get("LLM_BASE_URL", "")
-    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
-    llm_api_key = os.environ.get("LLM_API_KEY", "")
-    logger.info("Generating plan using LLM model: %s", llm_name)
-    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+    logger.info("Generating plan")
+    llm = get_llm()
 
     prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
     response = llm.invoke(prompt)
@@ -58,13 +50,7 @@ def generate_plan(state: AgentState) -> AgentState:
     logger.info("extracted plan from markdown fences if present")
 
     # Save plan to project folder
-    project_folder = state.get("project_folder", ".")
-    docs_dir = Path(project_folder) / "docs"
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    plan_file = docs_dir / "Plan.md"
-    plan_file.write_text(plan, encoding="utf-8")
-    logger.info("Plan saved to %s", plan_file)
-
+    write_plan(plan)
     return {"plan": plan}
 
 
@@ -170,11 +156,8 @@ def parse_tasks(text: str) -> dict[str, list[dict]]:
 
 def generate_tasks(state: AgentState) -> AgentState:
     """Break the implementation plan into a list of actionable tasks using LLM."""
-    llm_base_url = os.environ.get("LLM_BASE_URL", "")
-    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
-    llm_api_key = os.environ.get("LLM_API_KEY", "")
-    logger.info("Generating tasks using LLM model: %s", llm_name)
-    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+    logger.info("Generating tasks")
+    llm = get_llm()
 
     prompt = PROMPTS.get("task", "").format(plan=state.get("plan", "No plan provided."))
     response = llm.invoke(prompt)
@@ -214,18 +197,15 @@ def generate_code(state: AgentState) -> AgentState:
     to work on. Writes the generated code directly to the appropriate
     file in project_folder.
     """
-    llm_base_url = os.environ.get("LLM_BASE_URL", "")
-    llm_name = state.get("model") or os.environ.get("LLM_MODEL_NAME", "qwen3.6")
-    llm_api_key = os.environ.get("LLM_API_KEY", "")
-    logger.info("Generating code for single task using LLM model: %s", llm_name)
-    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+    current_idx = state.get("current_task_index", 0)
+    logger.info("Generating code task %s", current_idx)
+    llm = get_llm()
 
     project_folder = state.get("project_folder", ".")
     description = state["user_description"]
     plan = state.get("plan", "No plan provided.")
     pending_tasks: list[dict] = list(state.get("pending_tasks", []))
     completed_tasks: list[dict] = list(state.get("completed_tasks", []))
-    current_idx = state.get("current_task_index", 0)
 
     # Guard against index out of range (shouldn't happen if graph is correct, but safety first)
     if current_idx >= len(pending_tasks):
@@ -413,7 +393,7 @@ def run_code(state: AgentState) -> AgentState:
     code = state["generated_code"]
 
     # Determine the Python interpreter (venv if available, else python3)
-    venv_dir = Path(project_folder) / ".venv"
+    venv_dir = Path(project_folder).resolve() / ".venv"
     if venv_dir.exists():
         if os.name == "nt":
             python_exe = str(venv_dir / "Scripts" / "python.exe")
@@ -459,10 +439,7 @@ def run_code(state: AgentState) -> AgentState:
 def evaluate(state: AgentState) -> AgentState:
     """Evaluate the generated code using LLM."""
     logger.info("Evaluating generated code.")
-    llm_name = state.get("model") or __import__("os").environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
-    llm_api_key = __import__("os").environ.get("LLM_API_KEY", "")
-    llm_base_url = __import__("os").environ.get("LLM_BASE_URL", "")
-    llm = ChatOpenAI(model=llm_name, temperature=0, api_key=llm_api_key, base_url=llm_base_url if llm_base_url else None)
+    llm = get_llm()
 
     execution = state["execution_result"]
     prompt = PROMPTS.get("eval", "").format(
@@ -560,6 +537,14 @@ def main():
     add_file_handler(args.project_folder + "/workflow.log")
     logger.info("Logging to file: %s", args.project_folder + "/workflow.log")
 
+    # Update LLM configuration with CLI arguments if provided
+    if args.model is not None:
+        update_llm_config(model_name=args.model)
+
+    # Update the global working directory for file operations
+    update_work_dir(args.project_folder)
+
+
     # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
     initial_state["project_folder"] = args.project_folder
@@ -567,9 +552,6 @@ def main():
     initial_state["_skip_feedback"] = args.skip_feedback
     initial_state["current_task_index"] = 0
     initial_state["agent_id"] = agent_id
-
-    if args.model:
-        initial_state["model"] = args.model
 
     initial_state["max_retries"] = args.max_retries
     initial_state["task_attempts"] = 0
