@@ -19,6 +19,7 @@ from utils.files import update_work_dir, write_plan
 from utils.llm import get_llm, update_llm_config
 from utils.log_filter import setup_global_logging, set_global_agent_id, add_file_handler
 from utils.state import AgentState
+from utils.tool import ask_user, update_project_folder
 from utils.user_nodes import prompt_user, prompt_user_feedback
 
 logger = logging.getLogger(__name__)
@@ -27,16 +28,75 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def _invoke_llm_with_tools(llm, messages: list, tools: list, max_tool_calls: int = 10) -> str:
+    """Invoke LLM with tool support, executing tool calls in a loop.
+
+    Args:
+        llm: The LLM instance (bound with tools if needed).
+        messages: List of message dicts for the conversation.
+        tools: List of LangChain tools to bind.
+        max_tool_calls: Maximum number of tool call rounds to prevent infinite loops.
+
+    Returns:
+        The final text content from the LLM response.
+    """
+    logger.info("Invoking LLM with tools. Max tool calls: %d", max_tool_calls)
+    tool_map = {t.name: t for t in tools}
+    tool_call_count = 0
+
+    while tool_call_count < max_tool_calls:
+        response = llm.invoke(messages)
+
+        # Check if the response contains tool calls
+        if not hasattr(response, "tool_calls") or not response.tool_calls:
+            return response.content.strip()
+
+        # Execute each tool call and add results to messages
+        for tool_call in response.tool_calls:
+            tool_name = tool_call["name"]
+            tool_args = tool_call.get("args", {})
+            tool_call_id = tool_call.get("id", "")
+
+            logger.info("Executing tool: %s with args: %s", tool_name, tool_args)
+
+            if tool_name in tool_map:
+                tool_result = tool_map[tool_name].invoke(tool_args)
+                logger.info("Tool '%s' returned: %s", tool_name, tool_result[:200] if len(str(tool_result)) > 200 else tool_result)
+            else:
+                tool_result = f"Error: Unknown tool '{tool_name}'"
+
+            # Add assistant response with tool calls to messages
+            messages.append(response)
+
+            # Add tool result to messages
+            messages.append({
+                "role": "tool",
+                "content": str(tool_result),
+                "tool_call_id": tool_call_id,
+            })
+
+        tool_call_count += 1
+
+    logger.warning("Reached max tool calls (%d); returning last response content", max_tool_calls)
+    print(messages)
+    return response.content.strip()
+
+
 def generate_plan(state: AgentState) -> AgentState:
     """Generate a detailed implementation plan using LLM based on user description."""
     logger.info("Generating plan")
     llm = get_llm()
 
+    # Bind the ask_user tool to the LLM
+    llm_with_tools = llm.bind_tools([ask_user])
+
     prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
-    response = llm.invoke(prompt)
-    plan = response.content.strip()
+    messages = [{"role": "user", "content": prompt}]
+
+    plan = _invoke_llm_with_tools(llm_with_tools, messages, [ask_user])
     logger.info("Generated plan")
-    
+    print(plan)
+
     # Extract plan from markdown fences if present
     match = re.search(r'```markdown\s*\n(.*?)\n```', plan, re.DOTALL)
     if match:
@@ -113,6 +173,7 @@ def parse_tasks(text: str) -> dict[str, list[dict]]:
         Priority: critical / high / medium / low
         Effort: small / medium / large
     """
+    logger.info("Parsing tasks from LLM output.")
     pending: list[dict] = []
     completed: list[dict] = []
 
@@ -198,6 +259,7 @@ def generate_code(state: AgentState) -> AgentState:
     file in project_folder.
     """
     current_idx = state.get("current_task_index", 0)
+    logger.info("Generating code for task")
     logger.info("Generating code task %s", current_idx)
     llm = get_llm()
 
@@ -271,6 +333,7 @@ def generate_code(state: AgentState) -> AgentState:
 
 def check_and_advance_tasks(state: AgentState) -> AgentState:
     """Advance to the next pending task (increment index, reset per-task state)."""
+    logger.info("Checking and advancing tasks.")
     pending_tasks: list[dict] = list(state.get("pending_tasks", []))
     completed_tasks: list[dict] = list(state.get("completed_tasks", []))
     current_idx = state.get("current_task_index", 0)
@@ -302,6 +365,7 @@ def review_and_route(state: AgentState) -> AgentState:
       - "max_retries_exceeded": retry limit reached for this task → advance to next task
       - "pass"              : all good → advance to next task or END
     """
+    logger.info("Reviewing and routing task.")
     task_attempts = state.get("task_attempts", 0)
     max_retries = state.get("max_retries", 5)
 
@@ -333,12 +397,12 @@ def review_and_route(state: AgentState) -> AgentState:
     score_match = re.search(r'(\d+\.?\d*)', evaluation)
     if not score_match:
         # No explicit score — do a basic keyword check on the LLM output
-        score = _evaluate_score(evaluation)
+        score = evaluate_score(evaluation)
     else:
         score = float(score_match.group(1))
         # Heuristic: if score is very small it might be part of prose, not a 0-10 rating
         if score < 0.1 or (score > 50 and "/" not in evaluation):
-            score = _evaluate_score(evaluation)
+            score = evaluate_score(evaluation)
 
     logger.info("Evaluation score: %.1f", score)
     threshold = float(os.environ.get("EVAL_THRESHOLD", "7.0"))
@@ -352,11 +416,12 @@ def review_and_route(state: AgentState) -> AgentState:
     return {"review_result": "pass"}
 
 
-def _evaluate_score(evaluation: str) -> float:
+def evaluate_score(evaluation: str) -> float:
     """Heuristically extract a 0-10 score from an LLM evaluation text.
 
     Returns 9.0 (pass) if no clear signal of failure is found.
     """
+    logger.info("Evaluating generated code score.")
     eval_lower = evaluation.lower()
     # Explicit bad keywords
     for kw in ["critical error", "fatal error", "syntax error", "does not work",
@@ -377,8 +442,9 @@ def _evaluate_score(evaluation: str) -> float:
     return 9.0
 
 
-def _has_more_pending(state: AgentState) -> bool:
+def has_more_pending(state: AgentState) -> bool:
     """Check if there are more pending tasks to process."""
+    logger.info("Checking if there are more pending tasks.")
     pending_tasks: list[dict] = state.get("pending_tasks", [])
     current_idx = state.get("current_task_index", 0)
     has_more = current_idx < len(pending_tasks)
@@ -477,7 +543,7 @@ def parse_args() -> argparse.Namespace:
 
 
 
-def _create_venv(project_folder: str) -> str:
+def create_venv(project_folder: str) -> str:
     """Create a Python virtual environment in the project folder if it doesn't exist.
 
     Returns the path to the venv's Python interpreter.
@@ -524,8 +590,11 @@ def main():
     # Generate or use provided unique ID
     agent_id = args.agent_id or str(uuid.uuid4())[:8]
 
+    # Update project folder for tools and file operations
+    update_project_folder(args.project_folder)
+
     # Create and configure virtual environment for generated code execution
-    venv_python = _create_venv(args.project_folder)
+    venv_python = create_venv(args.project_folder)
     logger.info("Virtual environment Python: %s", venv_python)
 
     # Set up global logging with agent_id on the root logger
@@ -599,7 +668,7 @@ def main():
     # After advancing, decide: more tasks? loop back to generate_code. Done? END.
     graph_builder.add_conditional_edges(
         "check_and_advance_tasks",
-        lambda state: _has_more_pending(state),
+        lambda state: has_more_pending(state),
         {True: "generate_code", False: END},
     )
 
@@ -613,6 +682,7 @@ def main():
     print()
 
     result = app.invoke(initial_state)
+    logger.info("Workflow completed.")
 
     # Build and display results
     lines = []

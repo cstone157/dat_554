@@ -9,4 +9,5 @@ Instructions:
 - Specify key modules, classes, functions, or files that need to be created
 - Note any external libraries, configurations, or environment requirements
 - Keep the plan focused and actionable — avoid vague statements
+- **If you are unsure about any aspect of the user's requirements, design decisions, or technical approach, use the `ask_user` tool to request clarification before proceeding.** It is better to ask questions than to make assumptions.
 - Return ONLY the plan inside a markdown code fence (```markdown ... ```)

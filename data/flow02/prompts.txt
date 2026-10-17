@@ -1,0 +1,12 @@
+clear && python3 main.py -p tmp/p??/ -s -u ""
+
+X Create a simple commandline calculator, the calculator should support the operations of addition, subtraction, multiplication, and division.  The calculator should validate the user's input to ensure that all inputed number are valid and that the operations are of the four supported.  The calculator should be able to store values in a variable a through z, and can use those variables as part of their calculations.
+X Write a simple tic-tac-toe command line game, in python.  The user should be able to play in a two player mode using a shared key-board, or against the computer that randomly generates the actions of the opponents actions.
+X Write a command-line application that will read in a csv, identify which columns are numeric or categorical.  The program should ask the user which two columns to use, and then make a histogram and save it to a file.
+X Write a command-line application that will read in a csv, identify which columns are numeric or categorical.  The program should list all of the columns, whether it is numeric or categorical, and the mean of numeric columns
+- Write a command-line application that will read in the contents of a folder, if there are any files that are csv it should read those files.  The program should output the descriptive statistics about all of the csv files.
+- Create a commandline tool that will examie the contents of the file specified and identify the 10 most common root words, the command shouldn't count stop words.
+- Create a a webserver, the webserver should display a webpage that lists all of the files found in the folder named 'uploaded' and the timestamp that the file was last modified at.
+- Create a a webserver that hosts a webpage that has a homepage.  The homepage should let enable access to two webpages, one that acts as a timer and another one that creates a display that resembles fireworks.
+- Create a webserver that hosts a webserver to host a workout, the workout should support reps and sets, as well as having a timer to track rest periods between reps/sets.  The site should allow the user to edit their workout, and download/upload the workout in a json file.
+- Create an aplication scans the files in the folder specified as an argument, the program should be scanning the contents of a csv file.  The csv contains a list of dates, exercises, and rows representing the reps/sets or time that the exercise was accomplished for.  Generate a graph for each of the different exercises.
