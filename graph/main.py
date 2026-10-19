@@ -87,13 +87,22 @@ def generate_plan(state: AgentState) -> AgentState:
     logger.info("Generating plan")
     llm = get_llm()
 
-    # Bind the ask_user tool to the LLM
-    llm_with_tools = llm.bind_tools([ask_user])
+    skip_feedback = state.get("_skip_feedback", False)
 
-    prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
-    messages = [{"role": "user", "content": prompt}]
+    if skip_feedback:
+        # Use no-feedback prompt and exclude ask_user tool
+        prompt = PROMPTS.get("plan_no_feedback", "").format(description=state["user_description"])
+        messages = [{"role": "user", "content": prompt}]
+        plan = _invoke_llm_with_tools(llm, messages, [])
+    else:
+        # Bind the ask_user tool to the LLM
+        llm_with_tools = llm.bind_tools([ask_user])
 
-    plan = _invoke_llm_with_tools(llm_with_tools, messages, [ask_user])
+        prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
+        messages = [{"role": "user", "content": prompt}]
+
+        plan = _invoke_llm_with_tools(llm_with_tools, messages, [ask_user])
+
     logger.info("Generated plan")
     print(plan)
 
