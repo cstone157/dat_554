@@ -9,7 +9,7 @@ def prompt_user(state: AgentState) -> AgentState:
     """
     Get user description via CLI input.
     """
-
+    logger.info("PROMPT USER")
     logger.info("Prompting user for Python function description.")
     if state.get("user_description"):
         return state

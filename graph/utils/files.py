@@ -1,8 +1,11 @@
 import logging
+import subprocess
+import os
 from pathlib import Path
 
-from graph.utils import tool
 from typing import Annotated, Literal
+
+from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +166,39 @@ def read_file(
         return f"Error: Permission denied reading '{file_path}'."
     except Exception as e:
         return f"Error reading '{file_path}': {e}"
+
+
+def create_venv(project_folder: str) -> str:
+    """Create a Python virtual environment in the project folder if it doesn't exist.
+
+    Returns the path to the venv's Python interpreter.
+    """
+    venv_dir = Path(project_folder) / ".venv"
+    requirements_file = Path(__file__).parent / "requirements.txt"
+
+    if not venv_dir.exists():
+        logger.info("Creating virtual environment in %s", venv_dir)
+        subprocess.run(
+            ["python3", "-m", "venv", str(venv_dir)],
+            check=True,
+            capture_output=True,
+        )
+
+    # Determine the Python executable for this platform
+    if os.name == "nt":  # Windows
+        python_exe = venv_dir / "Scripts" / "python.exe"
+        pip_exe = venv_dir / "Scripts" / "pip.exe"
+    else:
+        python_exe = venv_dir / "bin" / "python"
+        pip_exe = venv_dir / "bin" / "pip"
+
+    # Install requirements if the file exists and the venv is fresh
+    if requirements_file.exists():
+        logger.info("Installing requirements from %s", requirements_file)
+        subprocess.run(
+            [str(pip_exe), "install", "-r", str(requirements_file)],
+            check=True,
+            capture_output=True,
+        )
+
+    return str(python_exe)

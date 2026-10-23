@@ -15,70 +15,17 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 
 from utils.config import PROMPTS
-from utils.files import update_project_folder, write_plan
-from utils.llm import get_llm, update_llm_config
+from utils.files import update_project_folder, write_plan, create_venv
+from utils.llm import get_llm, update_llm_config, invoke_llm_with_tools
 from utils.log_filter import setup_global_logging, set_global_agent_id, add_file_handler
 from utils.state import AgentState
-from utils.user_nodes import prompt_user, prompt_user_feedback, ask_user
+from utils.user import prompt_user, prompt_user_feedback, ask_user
+from utils.results import _generate_results_printout
 
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
-
-
-def _invoke_llm_with_tools(llm, messages: list, tools: list, max_tool_calls: int = 10) -> str:
-    """Invoke LLM with tool support, executing tool calls in a loop.
-
-    Args:
-        llm: The LLM instance (bound with tools if needed).
-        messages: List of message dicts for the conversation.
-        tools: List of LangChain tools to bind.
-        max_tool_calls: Maximum number of tool call rounds to prevent infinite loops.
-
-    Returns:
-        The final text content from the LLM response.
-    """
-    logger.info("Invoking LLM with tools. Max tool calls: %d", max_tool_calls)
-    tool_map = {t.name: t for t in tools}
-    tool_call_count = 0
-
-    while tool_call_count < max_tool_calls:
-        response = llm.invoke(messages)
-
-        # Check if the response contains tool calls
-        if not hasattr(response, "tool_calls") or not response.tool_calls:
-            return response.content.strip()
-
-        # Execute each tool call and add results to messages
-        for tool_call in response.tool_calls:
-            tool_name = tool_call["name"]
-            tool_args = tool_call.get("args", {})
-            tool_call_id = tool_call.get("id", "")
-
-            logger.info("Executing tool: %s with args: %s", tool_name, tool_args)
-
-            if tool_name in tool_map:
-                tool_result = tool_map[tool_name].invoke(tool_args)
-                logger.info("Tool '%s' returned: %s", tool_name, tool_result[:200] if len(str(tool_result)) > 200 else tool_result)
-            else:
-                tool_result = f"Error: Unknown tool '{tool_name}'"
-
-            # Add assistant response with tool calls to messages
-            messages.append(response)
-
-            # Add tool result to messages
-            messages.append({
-                "role": "tool",
-                "content": str(tool_result),
-                "tool_call_id": tool_call_id,
-            })
-
-        tool_call_count += 1
-
-    logger.warning("Reached max tool calls (%d); returning last response content", max_tool_calls)
-    print(messages)
-    return response.content.strip()
 
 
 def generate_plan(state: AgentState) -> AgentState:
@@ -92,7 +39,7 @@ def generate_plan(state: AgentState) -> AgentState:
         # Use no-feedback prompt and exclude ask_user tool
         prompt = PROMPTS.get("plan_no_feedback", "").format(description=state["user_description"])
         messages = [{"role": "user", "content": prompt}]
-        plan = _invoke_llm_with_tools(llm, messages, [])
+        plan = invoke_llm_with_tools(llm, messages, [])
     else:
         # Bind the ask_user tool to the LLM
         llm_with_tools = llm.bind_tools([ask_user])
@@ -100,7 +47,7 @@ def generate_plan(state: AgentState) -> AgentState:
         prompt = PROMPTS.get("plan", "").format(description=state["user_description"])
         messages = [{"role": "user", "content": prompt}]
 
-        plan = _invoke_llm_with_tools(llm_with_tools, messages, [ask_user])
+        plan = invoke_llm_with_tools(llm_with_tools, messages, [ask_user])
 
     logger.info("Generated plan")
     print(plan)
@@ -550,43 +497,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-
-def create_venv(project_folder: str) -> str:
-    """Create a Python virtual environment in the project folder if it doesn't exist.
-
-    Returns the path to the venv's Python interpreter.
-    """
-    venv_dir = Path(project_folder) / ".venv"
-    requirements_file = Path(__file__).parent / "requirements.txt"
-
-    if not venv_dir.exists():
-        logger.info("Creating virtual environment in %s", venv_dir)
-        subprocess.run(
-            ["python3", "-m", "venv", str(venv_dir)],
-            check=True,
-            capture_output=True,
-        )
-
-    # Determine the Python executable for this platform
-    if os.name == "nt":  # Windows
-        python_exe = venv_dir / "Scripts" / "python.exe"
-        pip_exe = venv_dir / "Scripts" / "pip.exe"
-    else:
-        python_exe = venv_dir / "bin" / "python"
-        pip_exe = venv_dir / "bin" / "pip"
-
-    # Install requirements if the file exists and the venv is fresh
-    if requirements_file.exists():
-        logger.info("Installing requirements from %s", requirements_file)
-        subprocess.run(
-            [str(pip_exe), "install", "-r", str(requirements_file)],
-            check=True,
-            capture_output=True,
-        )
-
-    return str(python_exe)
-
-
 def main():
     """Main entry point: build and run the LangGraph workflow."""
     args = parse_args()
@@ -617,10 +527,6 @@ def main():
     # Update LLM configuration with CLI arguments if provided
     if args.model is not None:
         update_llm_config(model_name=args.model)
-
-    # Update the global working directory for file operations
-    update_work_dir(args.project_folder)
-
 
     # Initialize state with CLI args; prompt_user will fill user_description
     initial_state: AgentState = {}
@@ -683,69 +589,13 @@ def main():
     # Compile the graph
     app = graph_builder.compile()
 
-    # Run the workflow
-    print("=" * 60)
-    print("  Python Code Generator & Evaluator")
-    print("=" * 60)
-    print()
-
     result = app.invoke(initial_state)
     logger.info("Workflow completed.")
-
-    # Build and display results
-    lines = []
-    lines.append("\n" + "=" * 60)
-    lines.append("  RESULTS")
-    lines.append("=" * 60)
-    lines.append("\n📝 User Description:")
-    lines.append(f"   {result['user_description']}")
-    lines.append("\n�️  Implementation Plan:")
-    lines.append("-" * 40)
-    lines.append(result.get("plan", "No plan generated."))
-    lines.append("-" * 40)    
-    pending = result.get("pending_tasks", [])
-    completed = result.get("completed_tasks", [])
-    if pending or completed:
-        lines.append("\n✅ Tasks:")
-        if pending:
-            lines.append("   Pending:")
-            for task in pending:
-                lines.append(f"      [{task.get('id', '?')}] {task.get('title', 'Untitled')}")
-        if completed:
-            lines.append("   Completed:")
-            for task in completed:
-                lines.append(f"      [{task.get('id', '?')}] {task.get('title', 'Untitled')}")
-        lines.append("-" * 40)    
-    lines.append("\n�💻 Generated Code:")
-    lines.append("-" * 40)
-    lines.append(result["generated_code"])
-    lines.append("-" * 40)
-
-    exec_result = result["execution_result"]
-    lines.append("\n⚡ Execution Results:")
-    if exec_result["stdout"]:
-        lines.append(f"\n   Standard Output:\n   {exec_result['stdout']}")
-    if exec_result["stderr"]:
-        lines.append(f"\n   Standard Error:\n   {exec_result['stderr']}")
-    lines.append(f"   Return Code: {exec_result['returncode']}")
-
-    lines.append("\n📊 Evaluation:")
-    lines.append("-" * 40)
-    lines.append(result["evaluation"])
-    lines.append("-" * 40)
-    output_text = "\n".join(lines) + "\n"
-
-    # Print to console
-    print(output_text)
-
-    # # Write to log file via logger
-    # for line in output_text.splitlines():
-    #     logger.info(line)
+    output_text = _generate_results_printout(result)
 
     # Save results to files
     project_folder = result.get("project_folder", "tmp")
     Path(project_folder + "/results.txt").write_text(output_text, encoding="utf-8")
-    # Path(project_folder + "/generated_code.py").write_text(result["generated_code"], encoding="utf-8")
     print(f"Results written to {project_folder}")
 
 

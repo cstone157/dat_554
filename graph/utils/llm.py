@@ -85,3 +85,56 @@ def update_llm_config(base_url=None, model_name=None, api_key=None, temperature=
         api_key=LLM_API_KEY,
         base_url=LLM_BASE_URL,
     )
+
+def invoke_llm_with_tools(llm, messages: list, tools: list, max_tool_calls: int = 10) -> str:
+    """Invoke LLM with tool support, executing tool calls in a loop.
+
+    Args:
+        llm: The LLM instance (bound with tools if needed).
+        messages: List of message dicts for the conversation.
+        tools: List of LangChain tools to bind.
+        max_tool_calls: Maximum number of tool call rounds to prevent infinite loops.
+
+    Returns:
+        The final text content from the LLM response.
+    """
+    logger.info("Invoking LLM with tools. Max tool calls: %d", max_tool_calls)
+    tool_map = {t.name: t for t in tools}
+    tool_call_count = 0
+
+    while tool_call_count < max_tool_calls:
+        response = llm.invoke(messages)
+
+        # Check if the response contains tool calls
+        if not hasattr(response, "tool_calls") or not response.tool_calls:
+            return response.content.strip()
+
+        # Execute each tool call and add results to messages
+        for tool_call in response.tool_calls:
+            tool_name = tool_call["name"]
+            tool_args = tool_call.get("args", {})
+            tool_call_id = tool_call.get("id", "")
+
+            logger.info("Executing tool: %s with args: %s", tool_name, tool_args)
+
+            if tool_name in tool_map:
+                tool_result = tool_map[tool_name].invoke(tool_args)
+                logger.info("Tool '%s' returned: %s", tool_name, tool_result[:200] if len(str(tool_result)) > 200 else tool_result)
+            else:
+                tool_result = f"Error: Unknown tool '{tool_name}'"
+
+            # Add assistant response with tool calls to messages
+            messages.append(response)
+
+            # Add tool result to messages
+            messages.append({
+                "role": "tool",
+                "content": str(tool_result),
+                "tool_call_id": tool_call_id,
+            })
+
+        tool_call_count += 1
+
+    logger.warning("Reached max tool calls (%d); returning last response content", max_tool_calls)
+    print(messages)
+    return response.content.strip()
