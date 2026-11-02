@@ -7,17 +7,13 @@ import os
 import uuid
 
 from dotenv import load_dotenv
-from langgraph.graph import StateGraph, END
 
-from utils.llm import get_llm, update_llm_config
 from utils.config import PROMPTS
 from utils.files import update_project_folder
-# from utils.files import update_project_folder, write_plan, create_venv
-# from utils.llm import get_llm, update_llm_config, invoke_llm_with_tools
+from utils.graph import generate_graph
+from utils.llm import get_llm, update_llm_config
 from utils.logging import setup_global_logging, set_global_agent_id, add_file_handler
-# from utils.state import AgentState
-# from utils.user import prompt_user, prompt_user_feedback, ask_user
-# from utils.results import _generate_results_printout
+from utils.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +55,31 @@ def main():
     setup_global_logging()
     set_global_agent_id(agent_id)
 
+    # Add file handler with the same AgentFormatter
+    add_file_handler(args.project_folder + "/workflow.log")
+
     # Update project folder for tools and file operations
     update_project_folder(args.project_folder)
 
     # Initialize the LLM with the specified model and temperature
     llm = get_llm(temperature=args.model)
+
+    # Build the initial state for the agent
+    initial_state = AgentState()
+    initial_state["user_prompt"] = args.user_prompt
+    initial_state["agent_id"] = agent_id
+    initial_state["project_folder"] = args.project_folder
+    initial_state["skip_user_prompt"] = args.skip_feedback
+    initial_state["eval_threshold"] = args.eval_threshold
+    initial_state["max_retries"] = args.max_retries
+
+    # Generate the state graph for the agent
+    graph = generate_graph()
+
+    # Run the agent with the initial state and the generated graph
+    result = graph.invoke(initial_state)
+    print(result)
+
 
 
 
