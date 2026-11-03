@@ -11,6 +11,9 @@ def update_project_folder(path: str):
     """Update the project folder path."""
     global PROJECT_FOLDER
     PROJECT_FOLDER = path
+def get_project_folder():
+    """Get the current project folder path."""
+    return PROJECT_FOLDER
 
 @tool
 def create_file(file_path: str, content: str):

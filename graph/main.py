@@ -8,7 +8,6 @@ import uuid
 
 from dotenv import load_dotenv
 
-from utils.config import PROMPTS
 from utils.files import update_project_folder
 from utils.graph import generate_graph
 from utils.llm import get_llm, update_llm_config

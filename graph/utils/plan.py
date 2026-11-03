@@ -1,8 +1,9 @@
+import os
 import logging
 
 from .config import PROMPTS
 from .llm import invoke_llm, invoke_llm_with_tools
-from .files import read_file, create_file, append_to_file, insert_into_file, delete_file, list_files
+from .files import read_file, create_file, append_to_file, insert_into_file, delete_file, list_files, get_project_folder
 from .state import AgentState
 from .user import prompt_user
 
@@ -28,6 +29,9 @@ def generate_plan(state: AgentState) -> AgentState:
     state["plan"] = response
 
     # Store the generated plan in the Plan.md in the docs folder
-    create_file("docs/Plan.md", response)
+    print(get_project_folder())
+    file_path = os.path.join(get_project_folder(), "docs/Plan.md")
+    with open(file_path, "w") as f:
+        f.write(response)
 
     return state
