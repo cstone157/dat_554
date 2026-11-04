@@ -14,14 +14,26 @@ def update_project_folder(path: str):
 def get_project_folder():
     """Get the current project folder path."""
     return PROJECT_FOLDER
+def save_file(file_path: str, content: str):
+    """Save content to a file at the specified path."""
+    if PROJECT_FOLDER is None:
+        return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
+    file_path = os.path.join(PROJECT_FOLDER, file_path)
+
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
+    with open(file_path, "w") as f:
+        f.write(content)
+    return file_path
 
 @tool
 def create_file(file_path: str, content: str):
     """Create a file with the given content at the specified path."""
+    logger.info(f",Tool_Invoked,'create_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'create_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     with open(file_path, "w") as f:
@@ -31,10 +43,10 @@ def create_file(file_path: str, content: str):
 @tool
 def read_file(file_path: str):
     """Read the content of a file at the specified path."""
+    logger.info(f",Tool_Invoked,'read_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'read_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     with open(file_path, "r") as f:
@@ -44,10 +56,10 @@ def read_file(file_path: str):
 @tool
 def delete_file(file_path: str):
     """Delete the file at the specified path."""
+    logger.info(f",Tool_Invoked,'delete_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'delete_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     if os.path.exists(file_path):
@@ -59,10 +71,10 @@ def delete_file(file_path: str):
 @tool
 def list_files(path: str):
     """List all files in the project folder."""
+    logger.info(f",Tool_Invoked,'list_files','{path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'list_files','{path}'")
     path = os.path.join(PROJECT_FOLDER, path)
     files = os.listdir(path)
     return files
@@ -70,10 +82,10 @@ def list_files(path: str):
 @tool
 def insert_into_file(file_path: str, content: str, position: Literal["start", "end"]):
     """Insert content into a file at the specified position."""
+    logger.info(f",Tool_Invoked,'insert_into_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'insert_into_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     if not os.path.exists(file_path):
@@ -96,10 +108,10 @@ def insert_into_file(file_path: str, content: str, position: Literal["start", "e
 @tool
 def append_to_file(file_path: str, content: str):
     """Append content to the end of a file at the specified path."""
+    logger.info(f",Tool_Invoked,'append_to_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'append_to_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     if not os.path.exists(file_path):
@@ -112,10 +124,10 @@ def append_to_file(file_path: str, content: str):
 @tool
 def update_file(file_path: str, content: str):
     """Update the content of a file at the specified path."""
+    logger.info(f",Tool_Invoked,'update_file','{file_path}'")
     if PROJECT_FOLDER is None:
         return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
 
-    logger.info(f",Tool_Invoked,'update_file','{file_path}'")
     file_path = os.path.join(PROJECT_FOLDER, file_path)
 
     if not os.path.exists(file_path):

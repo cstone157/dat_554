@@ -3,7 +3,7 @@ import logging
 
 from .config import PROMPTS
 from .llm import invoke_llm, invoke_llm_with_tools
-from .files import read_file, create_file, append_to_file, insert_into_file, delete_file, list_files, get_project_folder
+from .files import read_file, create_file, append_to_file, insert_into_file, delete_file, list_files, get_project_folder, save_file
 from .state import AgentState
 from .user import prompt_user
 
@@ -16,16 +16,19 @@ def generate_task(state: AgentState) -> AgentState:
     plan = state.get("plan", "")
     messages = []
 
+    print(f"TASK PROMPT: {PROMPTS['task']}")
+    print(f"PLAN: {plan}")
+    print(f"State: {state}")
+
     prompt = PROMPTS["task"].format(description=plan)
     
     tools = [prompt_user, read_file, create_file, append_to_file, insert_into_file, delete_file, list_files]
     messages.append({"role": "user", "content": prompt})
 
-
     response = invoke_llm_with_tools(messages, tools)
     state["task_list"] = response
 
     # Store the generated task list in the TaskList.md in the docs folder
-    create_file(os.path.join(get_project_folder(), "docs/Task.md"), response)
+    save_file("docs/Task.md", response)
 
     return state
