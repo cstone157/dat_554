@@ -77,7 +77,7 @@ def main():
 
     # Run the agent with the initial state and the generated graph
     result = graph.invoke(initial_state)
-    print(result)
+    # print(result)
 
 
 

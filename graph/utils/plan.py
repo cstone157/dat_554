@@ -25,7 +25,7 @@ def generate_plan(state: AgentState) -> AgentState:
         tools = [read_file, create_file, append_to_file, insert_into_file, delete_file, list_files]
         messages.append({"role": "user", "content": prompt})
 
-    response = invoke_llm_with_tools(messages, tools)
+    response = invoke_llm_with_tools(state, messages, tools)
     state["plan"] = response
 
     # Store the generated plan in the Plan.md in the docs folder
