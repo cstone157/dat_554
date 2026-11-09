@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
                         help="Minimum evaluation score (0-10) to pass review. Can also be set via EVAL_THRESHOLD env var.")
     parser.add_argument("--max_retries", type=int, default=5,
                         help="Maximum number of code regeneration attempts per task (default: 5)")
+    parser.add_argument("--max_tool_calls", type=int, default=20,
+                        help="Maximum number of tool calls per task (default: 20)")
     return parser.parse_args()
 
 def main():
@@ -71,6 +73,7 @@ def main():
     initial_state["skip_user_prompt"] = args.skip_feedback
     initial_state["eval_threshold"] = args.eval_threshold
     initial_state["max_retries"] = args.max_retries
+    initial_state["max_tool_calls"] = args.max_tool_calls
 
     # Generate the state graph for the agent
     graph = generate_graph()

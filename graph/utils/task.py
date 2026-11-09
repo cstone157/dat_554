@@ -63,4 +63,12 @@ def task_route(state: AgentState) -> AgentState:
         state["next_task"] = None
         return {"next_task": None}
 
-    return state
+    next_task = state["next_task"]
+    prompt = PROMPTS["task_planning"].format(prompt=next_task)
+    messages = [{"role": "user", "content": prompt}]
+    response = invoke_llm_with_tools(state, messages, tools)
+
+    if response == "Blocked":
+        return {"next_task": None, "blocked": True}
+
+    return {"next_task": state["next_task"]}
