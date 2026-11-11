@@ -15,7 +15,7 @@ def generate_code(state: AgentState) -> AgentState:
     logger.info(f",Agent_Invoked,'generate_code','{state.get('next_task', '')}'")
 
     next_task = state.get("next_task", "")
-    prompt = PROMPTS["code_generation"].format(prompt=next_task, description=state.get("user_prompt", ""))
+    prompt = PROMPTS["code"].format(prompt=next_task, description=state.get("user_prompt", ""))
     messages = [{"role": "user", "content": prompt}]
 
     tools = [

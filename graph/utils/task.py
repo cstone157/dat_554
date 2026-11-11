@@ -42,33 +42,25 @@ def generate_task(state: AgentState) -> AgentState:
     return state
 
 
-def task_route(state: AgentState) -> AgentState:
-    """Route the task based on its status."""
-    logger.info(f",Agent_Invoked,'task_route','{state.get('next_task', '')}'")
+# def task_route(state: AgentState) -> AgentState:
+#     """Route the task based on its status."""
+#     logger.info(f",Agent_Invoked,'task_route','{state.get('next_task', '')}'")
 
-    tools = [
-        read_file, create_file, append_to_file, insert_into_file, delete_file, list_files,
-        check_python_version, create_virtualenv, check_virtualenv, check_libraries, install_libraries, freeze_libraries
-    ]
+#     tools = [
+#         read_file, create_file, append_to_file, insert_into_file, delete_file, list_files,
+#         check_python_version, create_virtualenv, check_virtualenv, check_libraries, install_libraries, freeze_libraries
+#     ]
 
-    # Set the next task if none is currently set
-    if len(state["pending_tasks"]) > 0 and state.get("next_task") is None:
-        state["next_task"] = state["pending_tasks"][0]
-        state["pending_tasks"] = state["pending_tasks"][1:]
-    elif len(state["pending_tasks"]) > 0:
-        state["completed_tasks"].append(state["next_task"])
-        state["next_task"] = state["pending_tasks"][0]
-        state["pending_tasks"] = state["pending_tasks"][1:]
-    else:
-        state["next_task"] = None
-        return {"next_task": None}
+#     # Set the next task if none is currently set
+#     if len(state["pending_tasks"]) > 0 and state.get("next_task") is None:
+#         state["next_task"] = state["pending_tasks"][0]
+#         state["pending_tasks"] = state["pending_tasks"][1:]
+#     elif len(state["pending_tasks"]) > 0:
+#         state["completed_tasks"].append(state["next_task"])
+#         state["next_task"] = state["pending_tasks"][0]
+#         state["pending_tasks"] = state["pending_tasks"][1:]
+#     else:
+#         state["next_task"] = None
+#         return {"next_task": None}
 
-    next_task = state["next_task"]
-    prompt = PROMPTS["task_planning"].format(prompt=next_task)
-    messages = [{"role": "user", "content": prompt}]
-    response = invoke_llm_with_tools(state, messages, tools)
-
-    if response == "Blocked":
-        return {"next_task": None, "blocked": True}
-
-    return {"next_task": state["next_task"]}
+#     return {"next_task": state["next_task"]}

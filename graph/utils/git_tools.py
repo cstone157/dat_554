@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 @tool
 def git_status():
     """Get the current status of the Git repository."""
+    logger.info(",Tool_Invoked,'git_status'")
     try:
         result = subprocess.run(
             ["git", "status"],
@@ -25,6 +26,7 @@ def git_status():
 @tool
 def git_init():
     """Initialize a new Git repository."""
+    logger.info(",Tool_Invoked,'git_init'")
     try:
         result = subprocess.run(
             ["git", "init"],
@@ -40,6 +42,7 @@ def git_init():
 @tool
 def git_add(file_path: str):
     """Add a file to the Git staging area."""
+    logger.info(f",Tool_Invoked,'git_add','{file_path}'")
     try:
         result = subprocess.run(
             ["git", "add", file_path],
@@ -55,6 +58,7 @@ def git_add(file_path: str):
 @tool
 def git_commit(message: str):
     """Commit changes to the Git repository with a message."""
+    logger.info(f",Tool_Invoked,'git_commit','{message}'")
     try:
         result = subprocess.run(
             ["git", "commit", "-m", message],
