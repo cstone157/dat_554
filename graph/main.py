@@ -8,7 +8,7 @@ import uuid
 
 from dotenv import load_dotenv
 
-from utils.files import update_project_folder
+from utils.tools import update_project_folder
 from utils.graph import generate_graph
 from utils.llm import get_llm, update_llm_config
 from utils.logging import setup_global_logging, set_global_agent_id, add_file_handler
@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
                         help="LLM model name (overrides LLM_MODEL_NAME env var)")
     parser.add_argument("-p", "--project_folder", required=True, type=str,
                         help="Project folder path")
-    parser.add_argument("-u", "--user_prompt", type=str, default=None,
+    parser.add_argument("-u", "--user_request", type=str, default=None,
                         help="Initial user prompt for code generation (skips interactive input)")
     parser.add_argument("-i", "--id", type=str, default=None, dest="agent_id",
                         help="Unique identifier for this agent run (auto-generated if not provided)")
@@ -67,13 +67,13 @@ def main():
 
     # Build the initial state for the agent
     initial_state = AgentState()
-    initial_state["user_prompt"] = args.user_prompt
-    initial_state["agent_id"] = agent_id
-    initial_state["project_folder"] = args.project_folder
-    initial_state["skip_user_prompt"] = args.skip_feedback
-    initial_state["eval_threshold"] = args.eval_threshold
-    initial_state["max_retries"] = args.max_retries
-    initial_state["max_tool_calls"] = args.max_tool_calls
+    initial_state["user_request"] = args.user_request
+    # initial_state["agent_id"] = agent_id
+    # initial_state["project_folder"] = args.project_folder
+    # initial_state["skip_user_prompt"] = args.skip_feedback
+    # initial_state["eval_threshold"] = args.eval_threshold
+    # initial_state["max_retries"] = args.max_retries
+    # initial_state["max_tool_calls"] = args.max_tool_calls
 
     # Generate the state graph for the agent
     graph = generate_graph()

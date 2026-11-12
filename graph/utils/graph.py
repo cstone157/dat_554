@@ -2,12 +2,9 @@ import logging
 
 from langgraph.graph import END, StateGraph
 
-from .code import generate_code
-from .plan import generate_plan
-from .routing import task_route
-from .task import generate_task # , task_route
-# from .routing import evaluate_routing
+from .agents import router_node, planner_node
 from .state import AgentState
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,30 +16,29 @@ def generate_graph():
         A StateGraph instance representing the agent's state transitions.
     """
     graph_builder = StateGraph(AgentState)
-    graph_builder.add_node("generate_plan", generate_plan)
-    graph_builder.add_node("generate_task", generate_task)
-    graph_builder.add_node("generate_code", generate_code)
-    graph_builder.add_node("task_route", task_route)
-    # graph_builder.add_node("evaluate_routing", evaluate_routing)
-    
+    graph_builder.add_node("router", router_node)
+    graph_builder.add_node("planner", planner_node)
 
     # Set entry point
-    graph_builder.set_entry_point("generate_plan")
+    graph_builder.set_entry_point("router")
 
     # Add edges between nodes
-    graph_builder.add_edge("generate_plan", "generate_task")
-    graph_builder.add_edge("generate_task", "task_route")
-    graph_builder.add_edge("generate_code", "task_route")
+    graph_builder.add_edge("planner", END)
     
-    # # Add conditional edges
+    # Add conditional edges
     graph_builder.add_conditional_edges(
-        "generate_code",
-        task_route,
+        "router",
+        lambda state: state["next_node"],
         {
-            "coder": "generate_code",      # more tasks → back to coder
-            "evaluator": END,              # no tasks → finish
-        },
+            "Planner": "planner",
+            # "Tasker": "Tasker",
+            # "Coder": "Coder",
+            # "Evaluator": "Evaluator",
+            # "Final_Test": "Final_Test",
+            "COMPLETE": END
+        }
     )
+
 
     # Build the final graph from the builder
     graph = graph_builder.compile()
