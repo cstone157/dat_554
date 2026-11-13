@@ -43,7 +43,7 @@ class AgentState(TypedDict):
     completed_tasks: List[str]                 # Finished task IDs
 
     # ── Code & Execution ─────────────────────────────────────────
-    workspace: Dict[str, str]                  # File path → content
+    workspace: Dict[str, str]                  # File path → content  # Consider deleting me
     execution_results: Annotated[
         List[ExecutionResult], operator.add   # Accumulated results
     ]

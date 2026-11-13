@@ -1,6 +1,6 @@
 import logging
 
-_LOG_FORMAT = "\"%(asctime)s\", \"[%(agent_id)s]\", \"%(levelname)s\", \"%(message)s\""
+_LOG_FORMAT = "\"%(asctime)s\", \"[%(agent_id)s]\", \"%(levelname)s\", %(message)s"
 
 class AgentFormatter(logging.Formatter):
     """A formatter that injects agent_id into every log record.

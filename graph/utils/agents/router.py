@@ -32,7 +32,10 @@ Evaluate the current system state and route control cleanly:
 """
 
 def router_node(state: AgentState):
-    logger.info(f",Agent_Invoked,'router_node',''")
+    logger.info(f"Agent_Invoked,'router_node',''")
+
+    # print(state)
+
     llm = get_llm().with_structured_output(RouterDecision)
     
     # State projection for token management
@@ -50,8 +53,6 @@ def router_node(state: AgentState):
         SystemMessage(content=ROUTER_SYSTEM_PROMPT),
         HumanMessage(content=f"System Snapshot:\n{json.dumps(summary, indent=2)}")
     ])
-
-    print(decision)
     
     return {
         "next_node": decision.next_node,
