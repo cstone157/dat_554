@@ -2,7 +2,8 @@ import logging
 
 from langgraph.graph import END, StateGraph
 
-from .agents import router_node, planner_node, tasker_node, coder_node
+from .agents import router_node, planner_node, tasker_node, coder_node, \
+    evaluator_node, final_test_node
 from .state import AgentState
 
 
@@ -20,6 +21,8 @@ def generate_graph():
     graph_builder.add_node("planner", planner_node)
     graph_builder.add_node("tasker", tasker_node)
     graph_builder.add_node("coder", coder_node)
+    graph_builder.add_node("evaluator", evaluator_node)
+    graph_builder.add_node("final_test", final_test_node)
     
     # Set entry point
     graph_builder.set_entry_point("router")
@@ -27,7 +30,9 @@ def generate_graph():
     # Add edges between nodes
     graph_builder.add_edge("planner", "router")
     graph_builder.add_edge("tasker", "router")
-    graph_builder.add_edge("coder", END)
+    graph_builder.add_edge("coder", "router")
+    graph_builder.add_edge("evaluator", "router")
+    graph_builder.add_edge("final_test", "router")
     
     # Add conditional edges
     graph_builder.add_conditional_edges(
@@ -37,8 +42,8 @@ def generate_graph():
             "Planner": "planner",
             "Tasker": "tasker",
             "Coder": "coder",
-            # "Evaluator": "Evaluator",
-            # "Final_Test": "Final_Test",
+            "Evaluator": "evaluator",
+            "Final_Test": "final_test",
             "COMPLETE": END
         }
     )

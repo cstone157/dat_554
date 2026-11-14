@@ -28,6 +28,21 @@ def save_file(file_path: str, content: str):
     return file_path
 
 @tool
+def create_directory(path: str):
+    """Create a directory at the specified path."""
+    logger.info(f"Tool_Invoked,'create_directory','{path}'")
+    if PROJECT_FOLDER is None:
+        return "Error: PROJECT_FOLDER is not set. Call update_project_folder first."
+
+    path = os.path.join(PROJECT_FOLDER, path)
+
+    try:
+        os.makedirs(path, exist_ok=True)
+        return path
+    except Exception as e:
+        return f"Error: {e}"
+
+@tool
 def create_file(file_path: str, content: str):
     """Create a file with the given content at the specified path."""
     logger.info(f"Tool_Invoked,'create_file','{file_path}'")

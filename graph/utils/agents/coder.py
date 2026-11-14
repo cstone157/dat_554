@@ -10,7 +10,7 @@ from ..state import AgentState, Task
 from ..llm import get_llm
 from ..tools import create_file, read_file, list_files, insert_into_file, append_to_file, \
     update_file, check_python_version, setup_uv_virtual_environment, add_package_uv_virtual_environment, \
-    run_python_script
+    run_python_script, create_directory
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,8 @@ def coder_node(state: AgentState):
     conversation = [SystemMessage(content="You are a Principal Software Engineer."), HumanMessage(content=prompt)]
     llm = get_llm().bind_tools([
         create_file, read_file, list_files, insert_into_file, append_to_file, update_file,
-        check_python_version, setup_uv_virtual_environment, add_package_uv_virtual_environment, run_python_script
+        check_python_version, setup_uv_virtual_environment, add_package_uv_virtual_environment, 
+        run_python_script, create_directory
     ])
 
     # DELETE ME
@@ -66,6 +67,7 @@ def coder_node(state: AgentState):
                 "setup_uv_virtual_environment": setup_uv_virtual_environment,
                 "add_package_uv_virtual_environment": add_package_uv_virtual_environment,
                 "run_python_script": run_python_script,
+                "create_directory": create_directory,
             }[tool_call["name"]]
             result = tool.invoke(tool_call["args"])
             conversation.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
