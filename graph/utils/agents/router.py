@@ -54,6 +54,7 @@ def router_node(state: AgentState):
         HumanMessage(content=f"System Snapshot:\n{json.dumps(summary, indent=2)}")
     ])
     
+    logger.info(f"Agent_Resolved,'router_node','{decision.next_node} becasuse {decision.reasoning.split('\n')[0]}'")
     return {
         "next_node": decision.next_node,
         "current_task_id": decision.current_task_id or state.get("current_task_id"),

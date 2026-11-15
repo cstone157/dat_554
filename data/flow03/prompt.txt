@@ -1,0 +1,5 @@
+-  : Write a python script that takes a single argument with the path to a folder, the script should list all of the csv and xml files located in the folder and the child folders.
+-  : Write a command-line application to play tic-tac-toe.  The game should support single player mode, where the user plays agains the computer.  And it should support two player mode that uses a shared keyboard.
+-  : Write a command-line application in python that play's tic-tac-toe.  The game should allow for two players to play using a shared keyboard, with player one using the keys 'q','w','e','a','s','d','z','x','c' to place their pieces, and player two using the numpad to place their characters.  The game should also have a one player mode against the computer, the computer should use random placement of pieces.
+
+

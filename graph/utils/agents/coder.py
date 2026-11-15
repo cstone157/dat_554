@@ -22,6 +22,7 @@ def coder_node(state: AgentState):
         if t.id == current_task_id:
             current_task = t
             break
+    current_task.status = "in_progress"
     task_desc = current_task.description if current_task else "General implementation"
 
     # Get the issues for the current task
@@ -48,6 +49,7 @@ def coder_node(state: AgentState):
 
     # Invoke the LLM with the conversation
     while True:
+        logger.info(f"Agent_Working,'coder_node','Calling LLM {conversation[-1].content.split('\n')[0]}'")
         response = llm.invoke(conversation)
         
         print(f"Coder response : {response}")
@@ -69,14 +71,26 @@ def coder_node(state: AgentState):
                 "run_python_script": run_python_script,
                 "create_directory": create_directory,
             }[tool_call["name"]]
-            result = tool.invoke(tool_call["args"])
-            conversation.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+            try:
+                result = tool.invoke(tool_call["args"])
+
+                # Check if any of the tool calls that involve file operations were called
+                if tool_call["name"] in {"create_file", "read_file", "list_files", "insert_into_file", "append_to_file", "update_file"}:
+                    if tool_call["args"]["file_path"] not in current_task.assigned_files:
+                        current_task.assigned_files.append(tool_call["args"]["file_path"])
+
+                conversation.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+            except Exception as e:
+                logger.error(f"Tool call failed: {e}")
+                conversation.append(ToolMessage(content=f"Tool call failed: {e}", tool_call_id=tool_call["id"]))
 
             # DELETE ME
             # # Append the results to our workspace
             # if tool_call["name"] in {"create_file"}:
             #     new_workspace[tool_call["args"]["file_path"]] = result
-    
+
+    logger.info(f"Agent_Resolved,'coder_node',''")
+    current_task.status = "completed"
     return {
         # "workspace": new_workspace,
         "evaluation_passed": False # Reset gate for Evaluator

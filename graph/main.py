@@ -78,9 +78,15 @@ def main():
     # Generate the state graph for the agent
     graph = generate_graph()
 
-    # Run the agent with the initial state and the generated graph
-    result = graph.invoke(initial_state)
-    # print(result)
+    try:
+        logger.info(f"Workflow,'START','")
+        # Run the agent with the initial state and the generated graph
+        result = graph.invoke(initial_state)
+        # print(result)
+        logger.info(f"Workflow,'END','{result}'")
+    except Exception as e:
+        logger.error(f"Workflow,'ERROR','{e}'")
+        e.printStackTrace()
 
 
 

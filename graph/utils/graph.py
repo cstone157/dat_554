@@ -31,8 +31,9 @@ def generate_graph():
     graph_builder.add_edge("planner", "router")
     graph_builder.add_edge("tasker", "router")
     graph_builder.add_edge("coder", "router")
-    graph_builder.add_edge("evaluator", "router")
-    graph_builder.add_edge("final_test", "router")
+    graph_builder.add_edge("evaluator", END)
+    # graph_builder.add_edge("evaluator", "router")
+    # graph_builder.add_edge("final_test", "router")
     
     # Add conditional edges
     graph_builder.add_conditional_edges(

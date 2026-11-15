@@ -27,5 +27,6 @@ def tasker_node(state: AgentState):
 
     # Save the task list to the doc folder
     save_file('doc/Tasks.md', "\n".join([f"- {task.id}: {task.description}" for task in result.tasks]))
-    
+
+    logger.info(f"Agent_Resolved,'tasker_node',''")
     return {"tasks": result.tasks}

@@ -24,6 +24,7 @@ def planner_node(state: AgentState):
     # Save the project specification to the doc folder
     save_file('doc/Plan.md', res.content)
     
+    logger.info(f"Agent_Resolved,'planner_node',''")
     return {
         "project_specification": res.content,
         "issues": []
