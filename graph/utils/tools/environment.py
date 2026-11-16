@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from langchain_core.tools import tool
 
-from .files import get_project_folder
+from .files import get_project_folder, validate_path_within_project_folder
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,16 @@ def run_python_script(script_path: str) -> str:
 
     local_env = get_python_environment()
     if VIRTUAL_ENVIRONMENT:
+        # Validate the script path stays within PROJECT_FOLDER
+        resolved = validate_path_within_project_folder(script_path)
+        if isinstance(resolved, str) and resolved.startswith("Error:"):
+            return resolved
+
         try:
-            result = subprocess.run(["uv", "run", script_path], capture_output=True, text=True, env=local_env)
+            result = subprocess.run(
+                ["uv", "run", resolved],
+                capture_output=True, text=True, env=local_env
+            )
             return result.stdout.strip()
         except Exception as e:
             return f"Error: {e}"

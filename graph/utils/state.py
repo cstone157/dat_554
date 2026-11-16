@@ -9,7 +9,7 @@ class Task(BaseModel):
     title: str
     description: str
     dependencies: List[str] = Field(default_factory=list)
-    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    status: Literal["pending", "in_progress", "evaluated", "coded", "completed", "failed"] = "pending"
     assigned_files: List[str] = Field(default_factory=list)
 
 
@@ -34,6 +34,7 @@ class ExecutionResult(BaseModel):
 
 class AgentState(TypedDict):
     # ── Core Inputs ──────────────────────────────────────────────
+    project_folder: str                        # Root folder of the project
     user_request: str                          # Raw user description
     project_specification: Optional[str]       # Structured plan from Plan agent
 

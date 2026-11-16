@@ -69,7 +69,7 @@ def main():
     initial_state = AgentState()
     initial_state["user_request"] = args.user_request
     # initial_state["agent_id"] = agent_id
-    # initial_state["project_folder"] = args.project_folder
+    initial_state["project_folder"] = args.project_folder
     # initial_state["skip_user_prompt"] = args.skip_feedback
     # initial_state["eval_threshold"] = args.eval_threshold
     # initial_state["max_retries"] = args.max_retries
@@ -79,7 +79,7 @@ def main():
     graph = generate_graph()
 
     try:
-        logger.info(f"Workflow,'START','")
+        logger.info(f"Workflow,'START',''")
         # Run the agent with the initial state and the generated graph
         result = graph.invoke(initial_state)
         # print(result)
