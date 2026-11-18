@@ -73,9 +73,9 @@ def coder_node(state: AgentState):
                 "create_directory": create_directory,
             }[tool_call["name"]]
             try:
-                logger.info(f"Invoking tool: {tool_call['name']} with args: {tool_call['args']}")
+                print(f"Invoking tool: {tool_call['name']} with args: {tool_call['args']}")
                 result = tool.invoke(tool_call["args"])
-                logger.info(f"Tool {tool_call['name']} returned: {result}")
+                print(f"Tool {tool_call['name']} returned: {result}")
 
                 # Check if any of the tool calls that involve file operations were called
                 if tool_call["name"] in {"create_file", "read_file", "list_files", "insert_into_file", "append_to_file", "update_file"}:

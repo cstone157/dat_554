@@ -58,6 +58,6 @@ def router_node(state: AgentState):
     return {
         "next_node": decision.next_node,
         "current_task_id": decision.current_task_id or state.get("current_task_id"),
-        "current_issue_id": decision.current_issue_id or None,
+        # "current_issue_id": decision.current_issue_id or None,
         "iteration_count": state.get("iteration_count", 0) + 1
     }
