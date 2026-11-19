@@ -1,9 +1,15 @@
-lear && export PROJ_PATH="tmp/p00" && mkdir $PROJ_PATH -p && python3 main.py -p $PROJ_PATH -s -u ""
+clear && export PROJ_PATH="tmp/p00" && mkdir $PROJ_PATH -p && python3 main.py -p $PROJ_PATH -s -u ""
 
 - 8272ffc9 : Write a python function that takes two parameters, a and b.  The function should calculate c, such that c^2 = a^2 + b^2.
 - 2f279bc2 : Write a python function to calculate the distance between two different sets of longitude and latitude.
 - 87c75d8d : Write a simple web server to host a static html page.
 - be12480e : Webserver that host a page containing the contents of a csv file converted into html table.
+- 5801baa6 : Write a simple web server to host a static html page, that displays fireworks using javascript.
+- 9bf1d02a : Build an application in python that is a grcp data stream that sends messages tracking the flight paths of 10 to 15 airplanes flying in random directions.  The data needs to be in the ADSB format.
+- 04e0a082 : Build an application in python that is a grcp data stream that sends messages tracking the flight paths of 10 to 15 airplanes flying in random directions.  The data needs to be in the ADSB format.
+
+-  : Build an application in python that is a SSE data stream that sends messages tracking the flight paths of 10 to 15 airplanes flying in random directions.  The data needs to be in a json format, that includes a destination, location, altitude, air speed, and flight id.
+-  : 
 -  : Write a python script that takes a single argument with the path to a folder, the script should list all of the csv and xml files located in the folder and the child folders.
 -  : Write a command-line application to play tic-tac-toe.  The game should support single player mode, where the user plays agains the computer.  And it should support two player mode that uses a shared keyboard.
 -  : Write a command-line application in python that play's tic-tac-toe.  The game should allow for two players to play using a shared keyboard, with player one using the keys 'q','w','e','a','s','d','z','x','c' to place their pieces, and player two using the numpad to place their characters.  The game should also have a one player mode against the computer, the computer should use random placement of pieces.
