@@ -57,6 +57,6 @@ class AgentState(TypedDict):
     # ── Orchestration Control ────────────────────────────────────
     workflow_phase: str                        # Current phase identifier
     iteration_count: int                       # Loop counter
-    max_iterations: int                        # Safety limit (default 50)
+    max_iterations: int                        # Safety limit (default 250)
     eval_periodicity: int                      # Run evaluator every N iterations (default 3)
     next_node: str                             # Next routing target

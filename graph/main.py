@@ -45,8 +45,8 @@ def main():
     args = parse_args()
 
     # Set EVAL_THRESHOLD env var if user passed --eval_threshold
-    if args.eval_threshold is not None:
-        os.environ["EVAL_THRESHOLD"] = str(args.eval_threshold)
+    # if args.eval_threshold is not None:
+    #     os.environ["EVAL_THRESHOLD"] = str(args.eval_threshold)
 
     # Generate or use provided unique ID
     agent_id = args.agent_id or str(uuid.uuid4())[:8]

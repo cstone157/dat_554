@@ -28,6 +28,18 @@ def get_python_environment():
 
 
 @tool
+def setup_git_repository(path: str) -> str:
+    """Initialize a Git repository in the specified project folder."""
+    logger.info(f"Tool_Invoked,'setup_git_repository','{path}'")
+
+    local_env = get_python_environment()
+    try:
+        result = subprocess.run(["git", "init", path], capture_output=True, text=True, env=local_env)
+        return result.stdout.strip()
+    except Exception as e:
+        return f"Error: {e}"
+
+@tool
 def check_python_version(path: str) -> str:
     """Check the Python version in the specified virtual environment."""
     global VIRTUAL_ENVIRONMENT
